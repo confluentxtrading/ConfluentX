@@ -28,6 +28,11 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isLoggedIn = hasSessionCookie(req);
 
+  // Signed-in users skip the marketing page and land on their desk.
+  if (pathname === "/" && isLoggedIn) {
+    return NextResponse.redirect(new URL("/dashboard", req.url));
+  }
+
   // Protect the app.
   if (pathname.startsWith("/dashboard") && !isLoggedIn) {
     const loginUrl = new URL("/login", req.url);
@@ -45,6 +50,7 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
+    "/",
     "/dashboard/:path*",
     "/login",
     "/register",
