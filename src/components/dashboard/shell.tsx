@@ -8,6 +8,7 @@ import {
   Bell,
   BookOpen,
   CandlestickChart,
+  FlaskConical,
   Globe,
   LayoutDashboard,
   ListChecks,
@@ -45,6 +46,7 @@ import { useUi } from "@/store/ui";
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, exact: true },
   { label: "Charts", href: "/dashboard/charts", icon: CandlestickChart },
+  { label: "Backtest", href: "/dashboard/backtest", icon: FlaskConical },
   { label: "Markets", href: "/dashboard/markets", icon: Globe },
   { label: "Journal", href: "/dashboard/journal", icon: BookOpen },
   { label: "Watchlist", href: "/dashboard/watchlist", icon: ListChecks },

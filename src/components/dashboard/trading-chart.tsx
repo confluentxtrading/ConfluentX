@@ -1,16 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ColorType,
   CrosshairMode,
   createChart,
   type IChartApi,
   type ISeriesApi,
+  type LogicalRange,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  Eraser,
+  Loader2,
+  Minus,
+  PenLine,
+  Percent,
+  Plus,
+  Undo2,
+  X,
+} from "lucide-react";
 
+import {
+  getIndicator,
+  INDICATOR_COLORS,
+  INDICATOR_PRESETS,
+  instanceLabel,
+  type IndicatorInstance,
+} from "@/lib/indicators";
 import {
   FUTURES_SYMBOLS,
   TIMEFRAMES,
@@ -24,100 +42,252 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
+import { useCharts, type Anchor, type Drawing, type DrawingTool } from "@/store/charts";
 
-/* ── Indicator math ───────────────────────────────────────────────────────── */
+/* ── Small helpers ────────────────────────────────────────────────────────── */
 
-function emaSeries(candles: Candle[], period: number) {
-  const k = 2 / (period + 1);
-  let prev = candles[0]?.close ?? 0;
-  return candles.map((c, i) => {
-    prev = i === 0 ? c.close : c.close * k + prev * (1 - k);
-    return { time: c.time as UTCTimestamp, value: prev };
-  });
+function withAlpha(color: string, alpha: number): string {
+  if (color.startsWith("#")) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  return color;
 }
 
-function vwapSeries(candles: Candle[]) {
-  let cumPV = 0;
-  let cumV = 0;
-  return candles.map((c) => {
-    const typical = (c.high + c.low + c.close) / 3;
-    cumPV += typical * c.volume;
-    cumV += c.volume;
-    return { time: c.time as UTCTimestamp, value: cumPV / Math.max(1, cumV) };
-  });
+/** Binary search: index of the candle at/just before `time`. */
+function indexForTime(candles: Candle[], time: number): number {
+  let lo = 0;
+  let hi = candles.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (candles[mid].time <= time) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
 }
+
+const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+const CHART_OPTIONS = {
+  layout: {
+    background: { type: ColorType.Solid, color: "transparent" },
+    textColor: "#8b8d98",
+    fontFamily: "var(--font-geist-mono), monospace",
+    fontSize: 11,
+  },
+  grid: {
+    vertLines: { color: "rgba(255,255,255,0.04)" },
+    horzLines: { color: "rgba(255,255,255,0.04)" },
+  },
+  crosshair: {
+    mode: CrosshairMode.Normal,
+    vertLine: { color: "rgba(138,92,255,0.4)", labelBackgroundColor: "#6a3dff" },
+    horzLine: { color: "rgba(138,92,255,0.4)", labelBackgroundColor: "#6a3dff" },
+  },
+  rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
+  timeScale: {
+    borderColor: "rgba(255,255,255,0.08)",
+    timeVisible: true,
+    secondsVisible: false,
+  },
+  autoSize: true,
+} as const;
+
+const NO_DRAWINGS: Drawing[] = [];
+
+const DEFAULT_INDICATORS: IndicatorInstance[] = [
+  { id: "d1", type: "ema", params: { period: 9 }, color: "#4E6BFF" },
+  { id: "d2", type: "ema", params: { period: 21 }, color: "rgba(244,245,250,0.5)" },
+  { id: "d3", type: "vwap", params: {}, color: "#8A5CFF" },
+];
 
 /* ── Chart component ──────────────────────────────────────────────────────── */
-
-interface Indicators {
-  volume: boolean;
-  vwap: boolean;
-  emaFast: boolean;
-  emaSlow: boolean;
-}
 
 export function TradingChart({
   initialSymbol = "NQ",
   initialTimeframe = "5m",
+  symbol: symbolProp,
+  timeframe: timeframeProp,
+  onSymbolChange,
+  onTimeframeChange,
   className,
 }: {
   initialSymbol?: string;
   initialTimeframe?: Timeframe;
+  /** Controlled mode (multi-chart layouts pass these). */
+  symbol?: string;
+  timeframe?: Timeframe;
+  onSymbolChange?: (symbol: string) => void;
+  onTimeframeChange?: (timeframe: Timeframe) => void;
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const oscContainerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+
   const chartRef = useRef<IChartApi | null>(null);
+  const oscChartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const emaFastRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const emaSlowRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const instanceSeriesRef = useRef<Map<string, ISeriesApi<"Line" | "Histogram">[]>>(new Map());
+  const candlesRef = useRef<Candle[]>([]);
+  const syncingRef = useRef(false);
+  const draftRef = useRef<{ tool: Exclude<DrawingTool, null>; a: Anchor; b: Anchor } | null>(null);
 
-  const [symbol, setSymbol] = useState(initialSymbol);
-  const [timeframe, setTimeframe] = useState<Timeframe>(initialTimeframe);
-  const [indicators, setIndicators] = useState<Indicators>({
-    volume: true,
-    vwap: true,
-    emaFast: true,
-    emaSlow: true,
-  });
+  const [internalSymbol, setInternalSymbol] = useState(initialSymbol);
+  const [internalTimeframe, setInternalTimeframe] = useState<Timeframe>(initialTimeframe);
+  const symbol = symbolProp ?? internalSymbol;
+  const timeframe = timeframeProp ?? internalTimeframe;
+  const setSymbol = onSymbolChange ?? setInternalSymbol;
+  const setTimeframe = onTimeframeChange ?? setInternalTimeframe;
+
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [indicators, setIndicators] = useState<IndicatorInstance[]>(DEFAULT_INDICATORS);
+  const [showVolume, setShowVolume] = useState(true);
+  const [activeTool, setActiveTool] = useState<DrawingTool>(null);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<{ last: number; changePct: number } | null>(null);
 
-  const meta = FUTURES_SYMBOLS.find((s) => s.symbol === symbol);
+  const drawingsForSymbol = useCharts((s) => s.drawings[symbol]);
+  const drawings = drawingsForSymbol ?? NO_DRAWINGS;
+  const addDrawing = useCharts((s) => s.addDrawing);
+  const undoDrawing = useCharts((s) => s.undoDrawing);
+  const clearDrawings = useCharts((s) => s.clearDrawings);
 
-  /* Create the chart once. */
+  const meta = FUTURES_SYMBOLS.find((s) => s.symbol === symbol);
+  const hasOscillators = useMemo(
+    () => indicators.some((i) => getIndicator(i.type)?.pane === "oscillator"),
+    [indicators]
+  );
+
+  /* ── Drawing overlay rendering ──────────────────────────────────────────── */
+
+  const redrawOverlay = useCallback(() => {
+    const canvas = overlayRef.current;
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    const container = containerRef.current;
+    if (!canvas || !chart || !series || !container) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const { clientWidth: w, clientHeight: h } = container;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const all = candlesRef.current;
+    if (all.length === 0) return;
+
+    const xFor = (time: number): number | null => {
+      const coord = chart.timeScale().logicalToCoordinate(
+        indexForTime(all, time) as Parameters<
+          ReturnType<IChartApi["timeScale"]>["logicalToCoordinate"]
+        >[0]
+      );
+      return coord === null ? null : coord;
+    };
+    const yFor = (price: number): number | null => {
+      const coord = series.priceToCoordinate(price);
+      return coord === null ? null : coord;
+    };
+
+    const drawOne = (d: Drawing | { kind: Exclude<DrawingTool, null>; a: Anchor; b: Anchor }) => {
+      ctx.lineWidth = 1.5;
+      if (d.kind === "hline") {
+        const price = "price" in d ? d.price : d.b.price;
+        const y = yFor(price);
+        if (y === null) return;
+        ctx.strokeStyle = "rgba(138,92,255,0.9)";
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(138,92,255,1)";
+        ctx.font = "10px var(--font-geist-mono), monospace";
+        ctx.fillText(formatPrice(price, meta?.decimals ?? 2), 6, y - 4);
+        return;
+      }
+      if (!("a" in d)) return;
+      const x1 = xFor(d.a.time);
+      const x2 = xFor(d.b.time);
+      const y1 = yFor(d.a.price);
+      const y2 = yFor(d.b.price);
+      if (x1 === null || x2 === null || y1 === null || y2 === null) return;
+
+      if (d.kind === "trend") {
+        ctx.strokeStyle = "rgba(78,107,255,0.95)";
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        for (const [px, py] of [
+          [x1, y1],
+          [x2, y2],
+        ]) {
+          ctx.fillStyle = "#4E6BFF";
+          ctx.beginPath();
+          ctx.arc(px, py, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        return;
+      }
+
+      // Fibonacci retracement.
+      const left = Math.min(x1, x2);
+      const right = Math.max(x1, x2);
+      const range = d.b.price - d.a.price;
+      ctx.font = "10px var(--font-geist-mono), monospace";
+      for (const level of FIB_LEVELS) {
+        const price = d.b.price - range * level;
+        const y = yFor(price);
+        if (y === null) continue;
+        const emphasis = level === 0.5 || level === 0.618;
+        ctx.strokeStyle = emphasis ? "rgba(138,92,255,0.85)" : "rgba(138,92,255,0.4)";
+        ctx.setLineDash(emphasis ? [] : [4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(200,180,255,0.9)";
+        ctx.fillText(
+          `${(level * 100).toFixed(1)}% ${formatPrice(price, meta?.decimals ?? 2)}`,
+          right + 6,
+          y + 3
+        );
+      }
+      ctx.setLineDash([]);
+    };
+
+    for (const d of drawings) drawOne(d);
+    if (draftRef.current) drawOne({ kind: draftRef.current.tool, a: draftRef.current.a, b: draftRef.current.b });
+  }, [drawings, meta?.decimals]);
+
+  const redrawRef = useRef(redrawOverlay);
+  redrawRef.current = redrawOverlay;
+
+  /* ── Create charts once ─────────────────────────────────────────────────── */
+
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    const oscEl = oscContainerRef.current;
+    if (!el || !oscEl) return;
 
-    const chart = createChart(el, {
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#8b8d98",
-        fontFamily: "var(--font-geist-mono), monospace",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: "rgba(255,255,255,0.04)" },
-        horzLines: { color: "rgba(255,255,255,0.04)" },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(138,92,255,0.4)", labelBackgroundColor: "#6a3dff" },
-        horzLine: { color: "rgba(138,92,255,0.4)", labelBackgroundColor: "#6a3dff" },
-      },
-      rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
-      timeScale: {
-        borderColor: "rgba(255,255,255,0.08)",
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      autoSize: true,
+    const chart = createChart(el, CHART_OPTIONS);
+    const oscChart = createChart(oscEl, {
+      ...CHART_OPTIONS,
+      timeScale: { ...CHART_OPTIONS.timeScale, visible: false },
     });
 
-    const candles = chart.addCandlestickSeries({
+    const candleSeries = chart.addCandlestickSeries({
       upColor: "#2EBD85",
       downColor: "#E5484D",
       borderUpColor: "#2EBD85",
@@ -125,85 +295,55 @@ export function TradingChart({
       wickUpColor: "rgba(46,189,133,0.7)",
       wickDownColor: "rgba(229,72,77,0.7)",
     });
-
-    const volume = chart.addHistogramSeries({
+    const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
     });
-    chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.82, bottom: 0 },
-    });
+    chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
-    const vwap = chart.addLineSeries({
-      color: "#8A5CFF",
-      lineWidth: 2,
-      lineStyle: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const emaFast = chart.addLineSeries({
-      color: "#4E6BFF",
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const emaSlow = chart.addLineSeries({
-      color: "rgba(244,245,250,0.5)",
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
+    // Keep the oscillator pane horizontally locked to the main chart.
+    const syncFrom = (src: IChartApi, dst: IChartApi) => (range: LogicalRange | null) => {
+      if (syncingRef.current || !range) return;
+      syncingRef.current = true;
+      dst.timeScale().setVisibleLogicalRange(range);
+      syncingRef.current = false;
+      void src;
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(syncFrom(chart, oscChart));
+    oscChart.timeScale().subscribeVisibleLogicalRangeChange(syncFrom(oscChart, chart));
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => redrawRef.current());
+
+    const resizeObserver = new ResizeObserver(() => redrawRef.current());
+    resizeObserver.observe(el);
 
     chartRef.current = chart;
-    candleSeriesRef.current = candles;
-    volumeSeriesRef.current = volume;
-    vwapSeriesRef.current = vwap;
-    emaFastRef.current = emaFast;
-    emaSlowRef.current = emaSlow;
+    oscChartRef.current = oscChart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
 
     return () => {
+      resizeObserver.disconnect();
       chart.remove();
+      oscChart.remove();
       chartRef.current = null;
+      oscChartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      instanceSeriesRef.current.clear();
     };
   }, []);
 
-  /* Load data whenever symbol/timeframe changes. */
+  /* ── Data loading ───────────────────────────────────────────────────────── */
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/chart?symbol=${symbol}&timeframe=${timeframe}&count=300`);
+      const res = await fetch(`/api/chart?symbol=${symbol}&timeframe=${timeframe}&count=500`);
       if (!res.ok) return;
       const data = (await res.json()) as { candles: Candle[] };
-      const candles = data.candles;
-      if (candles.length === 0) return;
-
-      candleSeriesRef.current?.setData(
-        candles.map((c) => ({
-          time: c.time as UTCTimestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        }))
-      );
-      volumeSeriesRef.current?.setData(
-        candles.map((c) => ({
-          time: c.time as UTCTimestamp,
-          value: c.volume,
-          color: c.close >= c.open ? "rgba(46,189,133,0.35)" : "rgba(229,72,77,0.35)",
-        }))
-      );
-      vwapSeriesRef.current?.setData(vwapSeries(candles));
-      emaFastRef.current?.setData(emaSeries(candles, 9));
-      emaSlowRef.current?.setData(emaSeries(candles, 21));
-      chartRef.current?.timeScale().fitContent();
-
-      const last = candles[candles.length - 1];
-      const first = candles[0];
-      setStats({
-        last: last.close,
-        changePct: ((last.close - first.open) / first.open) * 100,
-      });
+      if (data.candles.length === 0) return;
+      setCandles(data.candles);
     } finally {
       setLoading(false);
     }
@@ -211,24 +351,196 @@ export function TradingChart({
 
   useEffect(() => {
     void loadData();
-    // Refresh the last bar periodically — mirrors a live feed's cadence.
     const id = setInterval(() => void loadData(), 30_000);
     return () => clearInterval(id);
   }, [loadData]);
 
-  /* Indicator visibility. */
-  useEffect(() => {
-    volumeSeriesRef.current?.applyOptions({ visible: indicators.volume });
-    vwapSeriesRef.current?.applyOptions({ visible: indicators.vwap });
-    emaFastRef.current?.applyOptions({ visible: indicators.emaFast });
-    emaSlowRef.current?.applyOptions({ visible: indicators.emaSlow });
-  }, [indicators]);
+  /* ── Base series data ───────────────────────────────────────────────────── */
 
-  const indicatorButtons: { key: keyof Indicators; label: string; color: string }[] = [
-    { key: "volume", label: "VOL", color: "text-muted-foreground" },
-    { key: "vwap", label: "VWAP", color: "text-brand-lilac" },
-    { key: "emaFast", label: "EMA 9", color: "text-brand-blue" },
-    { key: "emaSlow", label: "EMA 21", color: "text-foreground/60" },
+  useEffect(() => {
+    if (candles.length === 0) return;
+    candlesRef.current = candles;
+
+    candleSeriesRef.current?.setData(
+      candles.map((c) => ({
+        time: c.time as UTCTimestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      }))
+    );
+    volumeSeriesRef.current?.setData(
+      candles.map((c) => ({
+        time: c.time as UTCTimestamp,
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(46,189,133,0.35)" : "rgba(229,72,77,0.35)",
+      }))
+    );
+    chartRef.current?.timeScale().fitContent();
+
+    const last = candles[candles.length - 1];
+    const first = candles[0];
+    setStats({ last: last.close, changePct: ((last.close - first.open) / first.open) * 100 });
+    redrawRef.current();
+  }, [candles]);
+
+  /* ── Indicator instances → chart series ─────────────────────────────────── */
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const oscChart = oscChartRef.current;
+    if (!chart || !oscChart || candles.length === 0) return;
+
+    // Tear down previous instance series.
+    for (const [, seriesList] of instanceSeriesRef.current) {
+      for (const s of seriesList) {
+        try {
+          chart.removeSeries(s);
+        } catch {
+          try {
+            oscChart.removeSeries(s);
+          } catch {
+            /* already removed */
+          }
+        }
+      }
+    }
+    instanceSeriesRef.current.clear();
+
+    for (const inst of indicators) {
+      const def = getIndicator(inst.type);
+      if (!def) continue;
+      const target = def.pane === "oscillator" ? oscChart : chart;
+      const outputs = def.compute(candles, inst.params);
+      const seriesList: ISeriesApi<"Line" | "Histogram">[] = [];
+
+      let lineIndex = 0;
+      for (const out of outputs) {
+        // Pad oscillator outputs with whitespace so both charts share one
+        // logical timeline and stay pixel-aligned when panning.
+        const byTime = new Map(out.points.map((p) => [p.time, p]));
+        const data = candles.map((c) => {
+          const p = byTime.get(c.time);
+          return p
+            ? { time: c.time as UTCTimestamp, value: p.value, color: p.color }
+            : { time: c.time as UTCTimestamp };
+        });
+
+        if (out.style === "histogram") {
+          const s = target.addHistogramSeries({
+            priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          s.setData(data);
+          seriesList.push(s);
+        } else {
+          const color = lineIndex === 0 ? inst.color : withAlpha(inst.color, 0.45);
+          const s = target.addLineSeries({
+            color,
+            lineWidth: lineIndex === 0 ? 2 : 1,
+            lineStyle: out.dashed ? 2 : 0,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          s.setData(data);
+          seriesList.push(s);
+          lineIndex++;
+        }
+      }
+      instanceSeriesRef.current.set(inst.id, seriesList);
+    }
+  }, [indicators, candles]);
+
+  /* Volume visibility. */
+  useEffect(() => {
+    volumeSeriesRef.current?.applyOptions({ visible: showVolume });
+  }, [showVolume]);
+
+  /* Redraw drawings when they change. */
+  useEffect(() => {
+    redrawRef.current();
+  }, [drawings]);
+
+  /* ── Drawing tool pointer handlers ──────────────────────────────────────── */
+
+  const anchorAt = useCallback((x: number, y: number): Anchor | null => {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    const all = candlesRef.current;
+    if (!chart || !series || all.length === 0) return null;
+    const logical = chart.timeScale().coordinateToLogical(x);
+    const price = series.coordinateToPrice(y);
+    if (logical === null || price === null) return null;
+    const idx = Math.max(0, Math.min(all.length - 1, Math.round(logical)));
+    return { time: all[idx].time, price };
+  }, []);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!activeTool) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const anchor = anchorAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (!anchor) return;
+
+      if (activeTool === "hline") {
+        addDrawing(symbol, { id: crypto.randomUUID(), kind: "hline", price: anchor.price });
+        setActiveTool(null);
+        return;
+      }
+      draftRef.current = { tool: activeTool, a: anchor, b: anchor };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [activeTool, anchorAt, addDrawing, symbol]
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!draftRef.current) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const anchor = anchorAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (!anchor) return;
+      draftRef.current.b = anchor;
+      redrawRef.current();
+    },
+    [anchorAt]
+  );
+
+  const onPointerUp = useCallback(() => {
+    const draft = draftRef.current;
+    draftRef.current = null;
+    if (!draft) return;
+    if (draft.a.time !== draft.b.time || draft.a.price !== draft.b.price) {
+      addDrawing(symbol, {
+        id: crypto.randomUUID(),
+        kind: draft.tool as "trend" | "fib",
+        a: draft.a,
+        b: draft.b,
+      });
+    }
+    setActiveTool(null);
+    redrawRef.current();
+  }, [addDrawing, symbol]);
+
+  /* ── Toolbar ────────────────────────────────────────────────────────────── */
+
+  const addIndicator = (preset: (typeof INDICATOR_PRESETS)[number]) => {
+    setIndicators((list) => [
+      ...list,
+      {
+        id: crypto.randomUUID(),
+        type: preset.type,
+        params: preset.params,
+        color: INDICATOR_COLORS[list.length % INDICATOR_COLORS.length],
+      },
+    ]);
+  };
+
+  const toolButtons: { tool: Exclude<DrawingTool, null>; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { tool: "trend", label: "Trendline", icon: PenLine },
+    { tool: "hline", label: "Horizontal level", icon: Minus },
+    { tool: "fib", label: "Fib retracement", icon: Percent },
   ];
 
   return (
@@ -247,19 +559,13 @@ export function TradingChart({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
             {FUTURES_SYMBOLS.map((s) => (
-              <DropdownMenuItem
-                key={s.symbol}
-                onClick={() => setSymbol(s.symbol)}
-                className="font-mono"
-              >
+              <DropdownMenuItem key={s.symbol} onClick={() => setSymbol(s.symbol)} className="font-mono">
                 <span className="w-10 font-semibold">{s.symbol}</span>
                 <span className="text-xs text-muted-foreground">{s.name}</span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-
-        <div className="hidden text-xs text-muted-foreground sm:block">{meta?.name}</div>
 
         <div className="mx-1 h-5 w-px bg-white/8" />
 
@@ -269,7 +575,7 @@ export function TradingChart({
               key={tf.value}
               onClick={() => setTimeframe(tf.value)}
               className={cn(
-                "rounded-lg px-2.5 py-1 font-mono text-xs transition-colors",
+                "rounded-lg px-2 py-1 font-mono text-xs transition-colors",
                 timeframe === tf.value
                   ? "bg-brand-violet/15 text-brand-lilac"
                   : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
@@ -280,34 +586,73 @@ export function TradingChart({
           ))}
         </div>
 
-        <div className="mx-1 hidden h-5 w-px bg-white/8 md:block" />
+        <div className="mx-1 h-5 w-px bg-white/8" />
 
-        <div className="hidden items-center gap-0.5 md:flex">
-          {indicatorButtons.map((btn) => (
+        {/* Indicators */}
+        <DropdownMenu>
+          <DropdownMenuTrigger className="flex items-center gap-1 rounded-lg px-2 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground focus:outline-none">
+            <Plus className="size-3.5" />
+            Indicator
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
+            {INDICATOR_PRESETS.map((p) => (
+              <DropdownMenuItem key={p.label} onClick={() => addIndicator(p)} className="font-mono text-xs">
+                {p.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <button
+          onClick={() => setShowVolume((v) => !v)}
+          className={cn(
+            "rounded-lg px-2 py-1 font-mono text-[10px] transition-all",
+            showVolume ? "bg-white/6 text-muted-foreground" : "text-muted-foreground/40 hover:text-muted-foreground"
+          )}
+        >
+          VOL
+        </button>
+
+        <div className="mx-1 h-5 w-px bg-white/8" />
+
+        {/* Drawing tools */}
+        <div className="flex items-center gap-0.5">
+          {toolButtons.map(({ tool, label, icon: Icon }) => (
             <button
-              key={btn.key}
-              onClick={() => setIndicators((s) => ({ ...s, [btn.key]: !s[btn.key] }))}
+              key={tool}
+              title={label}
+              onClick={() => setActiveTool((t) => (t === tool ? null : tool))}
               className={cn(
-                "rounded-lg px-2 py-1 font-mono text-[10px] transition-all",
-                indicators[btn.key]
-                  ? cn("bg-white/6", btn.color)
-                  : "text-muted-foreground/40 hover:text-muted-foreground"
+                "rounded-lg p-1.5 transition-colors",
+                activeTool === tool
+                  ? "bg-brand-violet/20 text-brand-lilac"
+                  : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
               )}
             >
-              {btn.label}
+              <Icon className="size-3.5" />
             </button>
           ))}
+          <button
+            title="Undo last drawing"
+            onClick={() => undoDrawing(symbol)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+          >
+            <Undo2 className="size-3.5" />
+          </button>
+          <button
+            title="Clear drawings"
+            onClick={() => clearDrawings(symbol)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+          >
+            <Eraser className="size-3.5" />
+          </button>
         </div>
 
         <div className="ml-auto flex items-center gap-3 font-mono text-xs">
           {stats ? (
             <>
-              <span className="tabular text-foreground">
-                {formatPrice(stats.last, meta?.decimals ?? 2)}
-              </span>
-              <span
-                className={cn("tabular", stats.changePct >= 0 ? "text-up" : "text-down")}
-              >
+              <span className="tabular text-foreground">{formatPrice(stats.last, meta?.decimals ?? 2)}</span>
+              <span className={cn("tabular", stats.changePct >= 0 ? "text-up" : "text-down")}>
                 {formatPercent(stats.changePct)}
               </span>
             </>
@@ -316,8 +661,48 @@ export function TradingChart({
         </div>
       </div>
 
-      {/* Chart canvas */}
-      <div ref={containerRef} className="min-h-0 flex-1" />
+      {/* Active indicator chips */}
+      {indicators.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1 border-b border-white/5 px-3 py-1.5">
+          {indicators.map((inst) => (
+            <span
+              key={inst.id}
+              className="flex items-center gap-1 rounded-md bg-white/5 px-1.5 py-0.5 font-mono text-[10px]"
+              style={{ color: inst.color }}
+            >
+              {instanceLabel(inst)}
+              <button
+                onClick={() => setIndicators((list) => list.filter((i) => i.id !== inst.id))}
+                className="text-muted-foreground transition-colors hover:text-destructive"
+                aria-label={`Remove ${instanceLabel(inst)}`}
+              >
+                <X className="size-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Main chart + drawing overlay */}
+      <div className="relative min-h-0 flex-1">
+        <div ref={containerRef} className="absolute inset-0" />
+        <canvas
+          ref={overlayRef}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          className={cn(
+            "absolute inset-0 z-10 h-full w-full",
+            activeTool ? "cursor-crosshair" : "pointer-events-none"
+          )}
+        />
+      </div>
+
+      {/* Oscillator pane */}
+      <div
+        ref={oscContainerRef}
+        className={cn("h-32 shrink-0 border-t border-white/5", !hasOscillators && "hidden")}
+      />
     </div>
   );
 }
