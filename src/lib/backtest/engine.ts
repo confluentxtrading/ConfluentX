@@ -4,13 +4,16 @@ import type { Candle, SymbolMeta } from "@/lib/market-data";
 /**
  * Client-side strategy simulation over historical candles.
  *
- * Deliberately conservative fills: entries happen at the NEXT bar's open
- * after a signal, and if a bar touches both the stop and the target, the
- * stop is assumed to fill first.
+ * Deliberately conservative fills:
+ *  - entries happen at the NEXT bar's open after a signal, plus slippage
+ *  - if a bar touches both the stop and the target, the stop fills first
+ *  - stop/signal/end exits pay slippage; target exits are treated as limit
+ *    orders and fill at price
  */
 
 export type EntryRule = "ema-cross" | "rsi-extreme" | "breakout";
 export type Direction = "long" | "short" | "both";
+export type RiskMode = "fixed" | "percent";
 
 export interface StrategyConfig {
   entry: EntryRule;
@@ -27,7 +30,16 @@ export interface StrategyConfig {
   /** risk, in points */
   stopPoints: number;
   targetPoints: number;
+  /** trailing stop distance in points; 0 disables trailing */
+  trailingPoints: number;
+  /** slippage per fill, in points */
+  slippagePoints: number;
+  /** position sizing */
+  riskMode: RiskMode;
   contracts: number;
+  startBalance: number;
+  /** % of current balance risked per trade (riskMode "percent") */
+  riskPercent: number;
   /** flat commission per contract per side, $ */
   commission: number;
 }
@@ -43,12 +55,18 @@ export const DEFAULT_STRATEGY: StrategyConfig = {
   breakoutLookback: 20,
   stopPoints: 20,
   targetPoints: 40,
+  trailingPoints: 0,
+  slippagePoints: 0.5,
+  riskMode: "fixed",
   contracts: 1,
+  startBalance: 100_000,
+  riskPercent: 1,
   commission: 2.5,
 };
 
 export interface BacktestTrade {
   side: "long" | "short";
+  contracts: number;
   entryTime: number;
   exitTime: number;
   entryPrice: number;
@@ -56,7 +74,7 @@ export interface BacktestTrade {
   points: number;
   pnl: number;
   rMultiple: number;
-  exitReason: "stop" | "target" | "signal" | "end";
+  exitReason: "stop" | "trail" | "target" | "signal" | "end";
 }
 
 export interface EquityPoint {
@@ -66,13 +84,17 @@ export interface EquityPoint {
 
 export interface BacktestResult {
   trades: BacktestTrade[];
+  /** Absolute account equity (startBalance + cumulative P&L). */
   equity: EquityPoint[];
+  startBalance: number;
+  endBalance: number;
   netPnl: number;
   grossProfit: number;
   grossLoss: number;
   winRate: number;
   profitFactor: number;
   maxDrawdown: number;
+  maxDrawdownPct: number;
   sharpe: number;
   expectancyR: number;
   avgWin: number;
@@ -118,18 +140,37 @@ function buildSignals(candles: Candle[], cfg: StrategyConfig): Signal[] {
     return signals;
   }
 
-  // breakout
-  for (let i = cfg.breakoutLookback; i < n; i++) {
-    let hi = -Infinity;
-    let lo = Infinity;
-    for (let j = i - cfg.breakoutLookback; j < i; j++) {
-      hi = Math.max(hi, candles[j].high);
-      lo = Math.min(lo, candles[j].low);
+  // breakout — rolling extrema via monotonic deques, O(n) even at 10k bars.
+  const lb = cfg.breakoutLookback;
+  const hiDeque: number[] = [];
+  const loDeque: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i >= lb) {
+      const hi = candles[hiDeque[0]].high;
+      const lo = candles[loDeque[0]].low;
+      if (candles[i].close > hi) signals[i] = 1;
+      else if (candles[i].close < lo) signals[i] = -1;
     }
-    if (candles[i].close > hi) signals[i] = 1;
-    else if (candles[i].close < lo) signals[i] = -1;
+    while (hiDeque.length && candles[hiDeque[hiDeque.length - 1]].high <= candles[i].high)
+      hiDeque.pop();
+    hiDeque.push(i);
+    while (loDeque.length && candles[loDeque[loDeque.length - 1]].low >= candles[i].low)
+      loDeque.pop();
+    loDeque.push(i);
+    while (hiDeque[0] <= i - lb) hiDeque.shift();
+    while (loDeque[0] <= i - lb) loDeque.shift();
   }
   return signals;
+}
+
+interface OpenPosition {
+  side: "long" | "short";
+  contracts: number;
+  entryPrice: number;
+  entryTime: number;
+  stopLevel: number;
+  initialStop: number;
+  best: number;
 }
 
 export function runBacktest(
@@ -139,22 +180,38 @@ export function runBacktest(
 ): BacktestResult {
   const signals = buildSignals(candles, cfg);
   const trades: BacktestTrade[] = [];
-  const pointValue = meta.pointValue * cfg.contracts;
-  const commissionPerTrade = cfg.commission * cfg.contracts * 2; // in + out
+  const slip = cfg.slippagePoints;
 
-  let position: { side: "long" | "short"; entryPrice: number; entryTime: number } | null = null;
+  let balance = cfg.startBalance;
+  let position: OpenPosition | null = null;
+
+  const sizeFor = (): number => {
+    if (cfg.riskMode === "fixed") return cfg.contracts;
+    const riskDollars = balance * (cfg.riskPercent / 100);
+    const perContract = cfg.stopPoints * meta.pointValue;
+    return perContract > 0 ? Math.floor(riskDollars / perContract) : 0;
+  };
 
   const closeTrade = (
-    exitPrice: number,
+    rawExit: number,
     exitTime: number,
     exitReason: BacktestTrade["exitReason"]
   ) => {
     if (!position) return;
+    const paysSlippage = exitReason !== "target";
+    const exitPrice =
+      position.side === "long"
+        ? rawExit - (paysSlippage ? slip : 0)
+        : rawExit + (paysSlippage ? slip : 0);
     const points =
       position.side === "long" ? exitPrice - position.entryPrice : position.entryPrice - exitPrice;
-    const pnl = points * pointValue - commissionPerTrade;
+    const pnl =
+      points * meta.pointValue * position.contracts -
+      cfg.commission * position.contracts * 2;
+    balance += pnl;
     trades.push({
       side: position.side,
+      contracts: position.contracts,
       entryTime: position.entryTime,
       exitTime,
       entryPrice: position.entryPrice,
@@ -170,18 +227,19 @@ export function runBacktest(
   for (let i = 0; i < candles.length; i++) {
     const bar = candles[i];
 
-    // Manage the open position first: stop/target intrabar.
+    // Manage the open position first: stop (with trailing ratchet) / target.
     if (position) {
-      const p = position as { side: "long" | "short"; entryPrice: number; entryTime: number };
-      const stop =
-        p.side === "long" ? p.entryPrice - cfg.stopPoints : p.entryPrice + cfg.stopPoints;
+      const p = position as OpenPosition;
       const target =
         p.side === "long" ? p.entryPrice + cfg.targetPoints : p.entryPrice - cfg.targetPoints;
-      const stopHit = p.side === "long" ? bar.low <= stop : bar.high >= stop;
+      const stopHit = p.side === "long" ? bar.low <= p.stopLevel : bar.high >= p.stopLevel;
       const targetHit = p.side === "long" ? bar.high >= target : bar.low <= target;
 
       if (stopHit) {
-        closeTrade(stop, bar.time, "stop"); // conservative: stop before target
+        const trailed =
+          cfg.trailingPoints > 0 &&
+          (p.side === "long" ? p.stopLevel > p.initialStop : p.stopLevel < p.initialStop);
+        closeTrade(p.stopLevel, bar.time, trailed ? "trail" : "stop"); // stop before target
       } else if (targetHit) {
         closeTrade(target, bar.time, "target");
       } else if (
@@ -189,21 +247,40 @@ export function runBacktest(
         ((p.side === "long" && signals[i] === -1) || (p.side === "short" && signals[i] === 1))
       ) {
         closeTrade(bar.close, bar.time, "signal");
+      } else if (cfg.trailingPoints > 0) {
+        // Survived the bar — ratchet the trailing stop off the new extreme.
+        if (p.side === "long") {
+          p.best = Math.max(p.best, bar.high);
+          p.stopLevel = Math.max(p.stopLevel, p.best - cfg.trailingPoints);
+        } else {
+          p.best = Math.min(p.best, bar.low);
+          p.stopLevel = Math.min(p.stopLevel, p.best + cfg.trailingPoints);
+        }
       }
     }
 
-    // Entries fill at the next bar's open.
+    // Entries fill at the next bar's open, plus slippage.
     if (!position && i + 1 < candles.length && signals[i] !== 0) {
       const wantLong = signals[i] === 1;
-      if (
-        (wantLong && cfg.direction !== "short") ||
-        (!wantLong && cfg.direction !== "long")
-      ) {
-        position = {
-          side: wantLong ? "long" : "short",
-          entryPrice: candles[i + 1].open,
-          entryTime: candles[i + 1].time,
-        };
+      if ((wantLong && cfg.direction !== "short") || (!wantLong && cfg.direction !== "long")) {
+        const contracts = sizeFor();
+        if (contracts > 0) {
+          const entryPrice = wantLong
+            ? candles[i + 1].open + slip
+            : candles[i + 1].open - slip;
+          const initialStop = wantLong
+            ? entryPrice - cfg.stopPoints
+            : entryPrice + cfg.stopPoints;
+          position = {
+            side: wantLong ? "long" : "short",
+            contracts,
+            entryPrice,
+            entryTime: candles[i + 1].time,
+            stopLevel: initialStop,
+            initialStop,
+            best: entryPrice,
+          };
+        }
       }
     }
   }
@@ -216,13 +293,17 @@ export function runBacktest(
 
   const equity: EquityPoint[] = [];
   let cumulative = 0;
-  let peak = 0;
+  let peakEquity = cfg.startBalance;
   let maxDrawdown = 0;
+  let maxDrawdownPct = 0;
   for (const t of trades) {
     cumulative += t.pnl;
-    peak = Math.max(peak, cumulative);
-    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
-    equity.push({ time: t.exitTime, value: cumulative });
+    const eq = cfg.startBalance + cumulative;
+    peakEquity = Math.max(peakEquity, eq);
+    const dd = peakEquity - eq;
+    maxDrawdown = Math.max(maxDrawdown, dd);
+    if (peakEquity > 0) maxDrawdownPct = Math.max(maxDrawdownPct, (dd / peakEquity) * 100);
+    equity.push({ time: t.exitTime, value: eq });
   }
 
   const wins = trades.filter((t) => t.pnl > 0);
@@ -246,12 +327,15 @@ export function runBacktest(
   return {
     trades,
     equity,
+    startBalance: cfg.startBalance,
+    endBalance: cfg.startBalance + cumulative,
     netPnl: cumulative,
     grossProfit,
     grossLoss,
     winRate: trades.length ? (wins.length / trades.length) * 100 : 0,
     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
     maxDrawdown,
+    maxDrawdownPct,
     // Trade-based Sharpe (per-trade PnL mean/std, annualization-free).
     sharpe: std > 0 ? (mean / std) * Math.sqrt(trades.length) : 0,
     expectancyR: trades.length
@@ -262,6 +346,27 @@ export function runBacktest(
     largestWin: wins.length ? Math.max(...wins.map((t) => t.pnl)) : 0,
     largestLoss: losses.length ? Math.min(...losses.map((t) => t.pnl)) : 0,
     maxConsecutiveLosses,
-    totalCommission: trades.length * commissionPerTrade,
+    totalCommission: trades.reduce((a, t) => a + cfg.commission * t.contracts * 2, 0),
   };
+}
+
+/** Serialize a result's trade list as CSV for download. */
+export function tradesToCsv(result: BacktestResult): string {
+  const header =
+    "entry_time,exit_time,side,contracts,entry_price,exit_price,points,pnl,r_multiple,exit_reason";
+  const rows = result.trades.map((t) =>
+    [
+      new Date(t.entryTime * 1000).toISOString(),
+      new Date(t.exitTime * 1000).toISOString(),
+      t.side,
+      t.contracts,
+      t.entryPrice.toFixed(4),
+      t.exitPrice.toFixed(4),
+      t.points.toFixed(4),
+      t.pnl.toFixed(2),
+      t.rMultiple.toFixed(3),
+      t.exitReason,
+    ].join(",")
+  );
+  return [header, ...rows].join("\n");
 }

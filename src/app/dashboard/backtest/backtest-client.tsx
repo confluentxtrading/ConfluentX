@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import { FlaskConical, Loader2, Play } from "lucide-react";
+import { Download, FlaskConical, Loader2, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DEFAULT_STRATEGY,
   runBacktest,
+  tradesToCsv,
   type BacktestResult,
   type StrategyConfig,
 } from "@/lib/backtest/engine";
@@ -172,7 +173,7 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
               onChange={(e) => setBars(Number(e.target.value))}
               className={selectClass}
             >
-              {[300, 500, 1000].map((n) => (
+              {[300, 500, 1000, 2000, 5000, 10000].map((n) => (
                 <option key={n} value={n}>
                   {n}
                 </option>
@@ -234,11 +235,60 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
             </select>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <NumberField label="Stop (pts)" value={cfg.stopPoints} onChange={(v) => set("stopPoints", v)} step={0.25} />
             <NumberField label="Target (pts)" value={cfg.targetPoints} onChange={(v) => set("targetPoints", v)} step={0.25} />
-            <NumberField label="Contracts" value={cfg.contracts} onChange={(v) => set("contracts", v)} max={100} />
+            <NumberField
+              label="Trailing (pts, 0 = off)"
+              value={cfg.trailingPoints}
+              onChange={(v) => set("trailingPoints", v)}
+              min={0}
+              step={0.25}
+            />
+            <NumberField
+              label="Slippage (pts/fill)"
+              value={cfg.slippagePoints}
+              onChange={(v) => set("slippagePoints", v)}
+              min={0}
+              max={20}
+              step={0.25}
+            />
           </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Position sizing</Label>
+            <select
+              value={cfg.riskMode}
+              onChange={(e) => set("riskMode", e.target.value as StrategyConfig["riskMode"])}
+              className={selectClass}
+            >
+              <option value="fixed">Fixed contracts</option>
+              <option value="percent">Risk % of balance</option>
+            </select>
+          </div>
+
+          {cfg.riskMode === "fixed" ? (
+            <NumberField label="Contracts" value={cfg.contracts} onChange={(v) => set("contracts", v)} max={100} />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField
+                label="Start balance ($)"
+                value={cfg.startBalance}
+                onChange={(v) => set("startBalance", v)}
+                min={1000}
+                max={100000000}
+                step={1000}
+              />
+              <NumberField
+                label="Risk per trade (%)"
+                value={cfg.riskPercent}
+                onChange={(v) => set("riskPercent", v)}
+                min={0.1}
+                max={10}
+                step={0.1}
+              />
+            </div>
+          )}
 
           <Button onClick={() => void run()} disabled={running} className="w-full">
             {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
@@ -247,8 +297,9 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
           <p className="text-[11px] leading-relaxed text-muted-foreground/60">
             Simulated fills on historical data ({meta?.name ?? symbol}, $
-            {meta?.pointValue ?? "—"}/pt). Entries at next-bar open; stops assumed to fill before
-            targets. Past performance never guarantees future results.
+            {meta?.pointValue ?? "—"}/pt). Entries at next-bar open plus slippage; stops fill
+            before targets; targets fill as limit orders. Past performance never guarantees
+            future results.
           </p>
         </CardContent>
       </Card>
@@ -280,7 +331,11 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
                 label="Profit factor"
                 value={Number.isFinite(result.profitFactor) ? result.profitFactor.toFixed(2) : "∞"}
               />
-              <MetricTile label="Max drawdown" value={formatPnl(-result.maxDrawdown)} tone="down" />
+              <MetricTile
+                label="Max drawdown"
+                value={`${result.maxDrawdownPct.toFixed(1)}% (${formatPnl(-result.maxDrawdown)})`}
+                tone="down"
+              />
               <MetricTile label="Sharpe (trades)" value={result.sharpe.toFixed(2)} />
               <MetricTile label="Expectancy" value={`${result.expectancyR.toFixed(2)}R`} />
               <MetricTile label="Trades" value={String(result.trades.length)} />
@@ -300,10 +355,26 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
             </Card>
 
             <Card>
-              <CardHeader className="pb-2">
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm text-muted-foreground">
                   Trades ({result.trades.length})
                 </CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const blob = new Blob([tradesToCsv(result)], { type: "text/csv" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `confluentx-backtest-${symbol}-${timeframe}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <Download className="size-3.5" />
+                  CSV
+                </Button>
               </CardHeader>
               <CardContent className="overflow-x-auto">
                 <table className="w-full font-mono text-xs">
@@ -311,6 +382,7 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
                     <tr className="text-left text-muted-foreground">
                       <th className="pb-2 pr-4 font-normal">Entry</th>
                       <th className="pb-2 pr-4 font-normal">Side</th>
+                      <th className="pb-2 pr-4 font-normal">Qty</th>
                       <th className="pb-2 pr-4 font-normal">In</th>
                       <th className="pb-2 pr-4 font-normal">Out</th>
                       <th className="pb-2 pr-4 font-normal">Pts</th>
@@ -337,6 +409,7 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
                         >
                           {t.side.toUpperCase()}
                         </td>
+                        <td className="py-1.5 pr-4">{t.contracts}</td>
                         <td className="py-1.5 pr-4">{formatPrice(t.entryPrice, meta?.decimals ?? 2)}</td>
                         <td className="py-1.5 pr-4">{formatPrice(t.exitPrice, meta?.decimals ?? 2)}</td>
                         <td className={cn("py-1.5 pr-4 tabular", t.points >= 0 ? "text-up" : "text-down")}>

@@ -144,8 +144,10 @@ export function TradingChart({
   const setTimeframe = onTimeframeChange ?? setInternalTimeframe;
 
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [bars, setBars] = useState(500);
   const [indicators, setIndicators] = useState<IndicatorInstance[]>(DEFAULT_INDICATORS);
   const [showVolume, setShowVolume] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
   const [activeTool, setActiveTool] = useState<DrawingTool>(null);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<{ last: number; changePct: number } | null>(null);
@@ -184,6 +186,49 @@ export function TradingChart({
 
     const all = candlesRef.current;
     if (all.length === 0) return;
+
+    // Volume profile: horizontal volume-at-price histogram over the visible
+    // window. lightweight-charts has no horizontal series — this is ours.
+    if (showProfile) {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (range) {
+        const from = Math.max(0, Math.floor(range.from));
+        const to = Math.min(all.length - 1, Math.ceil(range.to));
+        let minP = Infinity;
+        let maxP = -Infinity;
+        for (let i = from; i <= to; i++) {
+          minP = Math.min(minP, all[i].low);
+          maxP = Math.max(maxP, all[i].high);
+        }
+        if (maxP > minP) {
+          const BINS = 24;
+          const binSize = (maxP - minP) / BINS;
+          const vols = new Array<number>(BINS).fill(0);
+          for (let i = from; i <= to; i++) {
+            const c = all[i];
+            const lo = Math.max(0, Math.min(BINS - 1, Math.floor((c.low - minP) / binSize)));
+            const hi = Math.max(0, Math.min(BINS - 1, Math.floor((c.high - minP) / binSize)));
+            const span = hi - lo + 1;
+            for (let b = lo; b <= hi; b++) vols[b] += c.volume / span;
+          }
+          const maxVol = Math.max(...vols);
+          const poc = vols.indexOf(maxVol);
+          const maxWidth = w * 0.22;
+          for (let b = 0; b < BINS; b++) {
+            const yTop = series.priceToCoordinate(minP + (b + 1) * binSize);
+            const yBottom = series.priceToCoordinate(minP + b * binSize);
+            if (yTop === null || yBottom === null || maxVol === 0) continue;
+            ctx.fillStyle = b === poc ? "rgba(138,92,255,0.32)" : "rgba(138,92,255,0.12)";
+            ctx.fillRect(
+              0,
+              Math.min(yTop, yBottom) + 1,
+              (vols[b] / maxVol) * maxWidth,
+              Math.abs(yBottom - yTop) - 2
+            );
+          }
+        }
+      }
+    }
 
     const xFor = (time: number): number | null => {
       const coord = chart.timeScale().logicalToCoordinate(
@@ -269,7 +314,7 @@ export function TradingChart({
 
     for (const d of drawings) drawOne(d);
     if (draftRef.current) drawOne({ kind: draftRef.current.tool, a: draftRef.current.a, b: draftRef.current.b });
-  }, [drawings, meta?.decimals]);
+  }, [drawings, meta?.decimals, showProfile]);
 
   const redrawRef = useRef(redrawOverlay);
   redrawRef.current = redrawOverlay;
@@ -339,7 +384,7 @@ export function TradingChart({
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/chart?symbol=${symbol}&timeframe=${timeframe}&count=500`);
+      const res = await fetch(`/api/chart?symbol=${symbol}&timeframe=${timeframe}&count=${bars}`);
       if (!res.ok) return;
       const data = (await res.json()) as { candles: Candle[] };
       if (data.candles.length === 0) return;
@@ -347,7 +392,7 @@ export function TradingChart({
     } finally {
       setLoading(false);
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, bars]);
 
   useEffect(() => {
     void loadData();
@@ -458,10 +503,10 @@ export function TradingChart({
     volumeSeriesRef.current?.applyOptions({ visible: showVolume });
   }, [showVolume]);
 
-  /* Redraw drawings when they change. */
+  /* Redraw the overlay when drawings or the volume profile toggle change. */
   useEffect(() => {
     redrawRef.current();
-  }, [drawings]);
+  }, [drawings, showProfile]);
 
   /* ── Drawing tool pointer handlers ──────────────────────────────────────── */
 
@@ -612,6 +657,34 @@ export function TradingChart({
         >
           VOL
         </button>
+        <button
+          title="Volume profile (volume at price)"
+          onClick={() => setShowProfile((v) => !v)}
+          className={cn(
+            "rounded-lg px-2 py-1 font-mono text-[10px] transition-all",
+            showProfile
+              ? "bg-brand-violet/15 text-brand-lilac"
+              : "text-muted-foreground/40 hover:text-muted-foreground"
+          )}
+        >
+          VP
+        </button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            title="History depth"
+            className="rounded-lg px-2 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground focus:outline-none"
+          >
+            {bars >= 1000 ? `${bars / 1000}K` : bars} bars
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {[500, 2000, 5000, 10000].map((n) => (
+              <DropdownMenuItem key={n} onClick={() => setBars(n)} className="font-mono text-xs">
+                {n.toLocaleString("en-US")} bars
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <div className="mx-1 h-5 w-px bg-white/8" />
 
