@@ -22,7 +22,10 @@ export default {
     Google,
     Credentials({
       async authorize(credentials) {
-        const parsed = loginSchema.safeParse(credentials);
+        // 2FA is enforced in /api/auth/login + the signIn callback; only
+        // email/password matter here. (`code` may arrive mangled by the
+        // form-data round-trip, so it must not fail validation.)
+        const parsed = loginSchema.pick({ email: true, password: true }).safeParse(credentials);
         if (!parsed.success) return null;
 
         const user = await getUserByEmail(parsed.data.email);

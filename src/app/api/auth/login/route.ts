@@ -76,7 +76,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    await signIn("credentials", { email, password, code, redirect: false });
+    // Omit `code` when absent — signIn serializes options into form data,
+    // so an undefined value would arrive in authorize() as the string "undefined".
+    await signIn("credentials", { email, password, ...(code ? { code } : {}), redirect: false });
   } catch (error) {
     if (error instanceof AuthError) {
       return apiError("Invalid email or password", 401);
