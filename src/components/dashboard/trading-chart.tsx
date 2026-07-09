@@ -76,6 +76,14 @@ function indexForTime(candles: Candle[], time: number): number {
 
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 
+/** ICT killzone sessions, minutes-of-day in UTC (ET+5, no DST refinement). */
+const KILLZONES = [
+  { label: "ASIA", startMin: 60, endMin: 300, fill: "rgba(138,92,255,0.05)", text: "rgba(138,92,255,0.6)" },
+  { label: "LDN", startMin: 420, endMin: 600, fill: "rgba(78,107,255,0.07)", text: "rgba(78,107,255,0.65)" },
+  { label: "NY AM", startMin: 810, endMin: 960, fill: "rgba(46,189,133,0.05)", text: "rgba(46,189,133,0.6)" },
+  { label: "NY PM", startMin: 1110, endMin: 1260, fill: "rgba(229,185,60,0.05)", text: "rgba(229,185,60,0.6)" },
+];
+
 /** lucide has no vertical-line glyph — a rotated Minus reads perfectly. */
 function VerticalLineIcon({ className }: { className?: string }) {
   return <Minus className={cn("rotate-90", className)} />;
@@ -159,6 +167,7 @@ export function TradingChart({
   const [indicators, setIndicators] = useState<IndicatorInstance[]>(DEFAULT_INDICATORS);
   const [showVolume, setShowVolume] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
+  const [showKillzones, setShowKillzones] = useState(false);
   const [activeTool, setActiveTool] = useState<DrawingTool>(null);
   const [magnetMode, setMagnetMode] = useState(false);
   const [drawingsHidden, setDrawingsHidden] = useState(false);
@@ -199,6 +208,46 @@ export function TradingChart({
 
     const all = candlesRef.current;
     if (all.length === 0) return;
+
+    const xAt = (i: number): number | null =>
+      chart.timeScale().logicalToCoordinate(
+        i as Parameters<ReturnType<IChartApi["timeScale"]>["logicalToCoordinate"]>[0]
+      );
+
+    // ICT killzone session shading — intraday timeframes only.
+    const tfSecs = TIMEFRAMES.find((t) => t.value === timeframe)?.seconds ?? 300;
+    if (showKillzones && tfSecs <= 3600) {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (range) {
+        const from = Math.max(0, Math.floor(range.from));
+        const to = Math.min(all.length - 1, Math.ceil(range.to));
+        ctx.font = "9px var(--font-geist-mono), monospace";
+        for (const zone of KILLZONES) {
+          let runStart = -1;
+          for (let i = from; i <= to + 1; i++) {
+            const inZone =
+              i <= to &&
+              (() => {
+                const minOfDay = Math.floor((all[i].time % 86400) / 60);
+                return minOfDay >= zone.startMin && minOfDay < zone.endMin;
+              })();
+            if (inZone && runStart === -1) {
+              runStart = i;
+            } else if (!inZone && runStart !== -1) {
+              const x1 = xAt(runStart);
+              const x2 = xAt(Math.min(i, all.length - 1));
+              if (x1 !== null && x2 !== null && x2 > x1) {
+                ctx.fillStyle = zone.fill;
+                ctx.fillRect(x1, 0, x2 - x1, h);
+                ctx.fillStyle = zone.text;
+                ctx.fillText(zone.label, x1 + 3, 10);
+              }
+              runStart = -1;
+            }
+          }
+        }
+      }
+    }
 
     // Volume profile: horizontal volume-at-price histogram over the visible
     // window. lightweight-charts has no horizontal series — this is ours.
@@ -383,7 +432,7 @@ export function TradingChart({
       if (draftRef.current)
         drawOne({ kind: draftRef.current.tool, a: draftRef.current.a, b: draftRef.current.b });
     }
-  }, [drawings, meta?.decimals, showProfile, drawingsHidden]);
+  }, [drawings, meta?.decimals, showProfile, drawingsHidden, showKillzones, timeframe]);
 
   const redrawRef = useRef(redrawOverlay);
   redrawRef.current = redrawOverlay;
@@ -581,7 +630,7 @@ export function TradingChart({
   /* Redraw the overlay when drawings or overlay toggles change. */
   useEffect(() => {
     redrawRef.current();
-  }, [drawings, showProfile, drawingsHidden]);
+  }, [drawings, showProfile, drawingsHidden, showKillzones]);
 
   /* ── Drawing tool pointer handlers ──────────────────────────────────────── */
 
@@ -762,6 +811,18 @@ export function TradingChart({
           )}
         >
           VP
+        </button>
+        <button
+          title="ICT killzones (Asia / London / NY sessions)"
+          onClick={() => setShowKillzones((v) => !v)}
+          className={cn(
+            "rounded-lg px-2 py-1 font-mono text-[10px] transition-all",
+            showKillzones
+              ? "bg-brand-violet/15 text-brand-lilac"
+              : "text-muted-foreground/40 hover:text-muted-foreground"
+          )}
+        >
+          KZ
         </button>
 
         <DropdownMenu>

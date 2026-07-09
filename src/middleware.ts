@@ -28,12 +28,10 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isLoggedIn = hasSessionCookie(req);
 
-  // Login gateway: the root route never renders publicly. Signed-in users
-  // land on their desk; everyone else goes straight to the sign-in screen.
-  if (pathname === "/") {
-    return NextResponse.redirect(
-      new URL(isLoggedIn ? "/dashboard" : "/login?callbackUrl=%2Fdashboard", req.url)
-    );
+  // Signed-in users skip the marketing page and land on their desk;
+  // new visitors see the public landing page and sign in from its buttons.
+  if (pathname === "/" && isLoggedIn) {
+    return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
   // Protect the app.
