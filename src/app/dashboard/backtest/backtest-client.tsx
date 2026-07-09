@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Download, FlaskConical, Loader2, Play } from "lucide-react";
 
@@ -16,6 +16,7 @@ import {
   type BacktestResult,
   type StrategyConfig,
 } from "@/lib/backtest/engine";
+import { monteCarlo } from "@/lib/backtest/monte-carlo";
 import {
   FUTURES_SYMBOLS,
   TIMEFRAMES,
@@ -127,6 +128,10 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
   };
 
   const meta = FUTURES_SYMBOLS.find((s) => s.symbol === symbol);
+  const mc = useMemo(
+    () => (result ? monteCarlo(result.trades, result.startBalance) : null),
+    [result]
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -353,6 +358,32 @@ export function BacktestClient({ defaultSymbol }: { defaultSymbol: string }) {
                 <EquityCurve points={result.equity} className="h-64" />
               </CardContent>
             </Card>
+
+            {mc ? (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-muted-foreground">
+                    Monte Carlo — {mc.runs.toLocaleString("en-US")} reshuffles of these trades
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <MetricTile label="5th percentile" value={`$${formatPrice(mc.p5, 0)}`} tone="down" />
+                    <MetricTile label="Median ending" value={`$${formatPrice(mc.median, 0)}`} />
+                    <MetricTile label="95th percentile" value={`$${formatPrice(mc.p95, 0)}`} tone="up" />
+                    <MetricTile
+                      label={`Risk of −${mc.ruinDrawdownPct}% account`}
+                      value={`${mc.riskOfRuinPct.toFixed(1)}%`}
+                      tone={mc.riskOfRuinPct > 5 ? "down" : undefined}
+                    />
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/60">
+                    The same trades replayed in random order. If the 5th percentile looks scary,
+                    the edge depends on trade sequence — size down.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : null}
 
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">

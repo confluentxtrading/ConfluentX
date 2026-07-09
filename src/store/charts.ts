@@ -23,19 +23,19 @@ export type DrawingTool = Drawing["kind"] | null;
 
 /* ── Multi-chart layout ──────────────────────────────────────────────────── */
 
-export type ChartLayout = "1" | "2h" | "2v" | "4";
+export type ChartLayout = "1" | "2h" | "2v" | "4" | "6" | "9" | "16";
 
 export interface ChartCell {
   symbol: string;
   timeframe: Timeframe;
 }
 
-const DEFAULT_CELLS: ChartCell[] = [
-  { symbol: "NQ", timeframe: "5m" },
-  { symbol: "ES", timeframe: "5m" },
-  { symbol: "GC", timeframe: "15m" },
-  { symbol: "CL", timeframe: "15m" },
-];
+const CELL_ROTATION = ["NQ", "ES", "GC", "CL", "BTC", "ETH", "EURUSD", "AAPL"];
+
+const DEFAULT_CELLS: ChartCell[] = Array.from({ length: 16 }, (_, i) => ({
+  symbol: CELL_ROTATION[i % CELL_ROTATION.length],
+  timeframe: i < 4 ? "5m" : "15m",
+}));
 
 interface ChartsState {
   layout: ChartLayout;
@@ -56,9 +56,15 @@ export const useCharts = create<ChartsState>()(
       drawings: {},
       setLayout: (layout) => set({ layout }),
       setCell: (index, cell) =>
-        set((s) => ({
-          cells: s.cells.map((c, i) => (i === index ? { ...c, ...cell } : c)),
-        })),
+        set((s) => {
+          // Persisted state from older versions may hold fewer cells — pad.
+          const cells = [...s.cells];
+          while (cells.length <= index) {
+            cells.push(DEFAULT_CELLS[cells.length] ?? { symbol: "NQ", timeframe: "5m" });
+          }
+          cells[index] = { ...cells[index], ...cell };
+          return { cells };
+        }),
       addDrawing: (symbol, drawing) =>
         set((s) => ({
           drawings: { ...s.drawings, [symbol]: [...(s.drawings[symbol] ?? []), drawing] },
