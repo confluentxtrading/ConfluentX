@@ -12,8 +12,12 @@ export interface Anchor {
 
 export type Drawing =
   | { id: string; kind: "trend"; a: Anchor; b: Anchor }
+  | { id: string; kind: "ray"; a: Anchor; b: Anchor }
+  | { id: string; kind: "rect"; a: Anchor; b: Anchor }
+  | { id: string; kind: "measure"; a: Anchor; b: Anchor }
+  | { id: string; kind: "fib"; a: Anchor; b: Anchor }
   | { id: string; kind: "hline"; price: number }
-  | { id: string; kind: "fib"; a: Anchor; b: Anchor };
+  | { id: string; kind: "vline"; time: number };
 
 export type DrawingTool = Drawing["kind"] | null;
 

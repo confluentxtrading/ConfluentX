@@ -1,11 +1,11 @@
 import { z } from "zod";
 
 import { apiError, apiSuccess, requireSession } from "@/lib/api";
-import { marketData, type Timeframe } from "@/lib/market-data";
+import { marketData, TIMEFRAME_VALUES, type Timeframe } from "@/lib/market-data";
 
 const querySchema = z.object({
   symbol: z.string().min(1).max(6),
-  timeframe: z.enum(["1m", "5m", "15m", "1h", "4h", "1d"]).default("5m"),
+  timeframe: z.enum(TIMEFRAME_VALUES).default("5m"),
   count: z.coerce.number().int().min(10).max(10000).default(300),
 });
 

@@ -13,6 +13,9 @@ const CATEGORY_LABELS: Record<string, string> = {
   index: "Equity Index",
   energy: "Energy",
   metals: "Metals",
+  crypto: "Crypto",
+  fx: "Forex",
+  equity: "Stocks",
 };
 
 export default function MarketsPage() {
@@ -23,7 +26,7 @@ export default function MarketsPage() {
       <div>
         <h1 className="font-display text-xl font-semibold tracking-tight">Markets</h1>
         <p className="text-sm text-muted-foreground">
-          CME futures universe — live snapshot.
+          Futures, crypto, forex, and equities — live snapshot.
         </p>
       </div>
 

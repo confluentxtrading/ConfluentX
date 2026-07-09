@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { apiError, apiSuccess, isSameOrigin, requireSession } from "@/lib/api";
 import { db } from "@/lib/db";
+import { TIMEFRAME_VALUES } from "@/lib/market-data";
 
 export async function GET() {
   const session = await requireSession();
@@ -18,7 +19,7 @@ export async function GET() {
 
 const patchSchema = z.object({
   defaultSymbol: z.string().min(1).max(6).optional(),
-  defaultTimeframe: z.enum(["1m", "5m", "15m", "1h", "4h", "1d"]).optional(),
+  defaultTimeframe: z.enum(TIMEFRAME_VALUES).optional(),
   chartType: z.enum(["candles", "bars", "line"]).optional(),
   showVolume: z.boolean().optional(),
   showVwap: z.boolean().optional(),

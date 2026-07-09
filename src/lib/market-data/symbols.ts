@@ -1,6 +1,9 @@
 import type { SymbolMeta } from "./types";
 
-/** CME futures universe supported at launch. */
+/**
+ * Tradable universe. Started as CME futures; now spans crypto, FX, and
+ * equities. (The export keeps its original name — it is imported widely.)
+ */
 export const FUTURES_SYMBOLS: SymbolMeta[] = [
   {
     symbol: "NQ",
@@ -97,6 +100,78 @@ export const FUTURES_SYMBOLS: SymbolMeta[] = [
     decimals: 1,
     basePrice: 3348,
     volatility: 4.2,
+  },
+  {
+    symbol: "BTC",
+    name: "Bitcoin / USD",
+    exchange: "CRYPTO",
+    category: "crypto",
+    tickSize: 1,
+    tickValue: 1,
+    pointValue: 1,
+    decimals: 0,
+    basePrice: 112400,
+    volatility: 220,
+  },
+  {
+    symbol: "ETH",
+    name: "Ether / USD",
+    exchange: "CRYPTO",
+    category: "crypto",
+    tickSize: 0.1,
+    tickValue: 0.1,
+    pointValue: 1,
+    decimals: 1,
+    basePrice: 4120,
+    volatility: 11,
+  },
+  {
+    symbol: "EURUSD",
+    name: "Euro / US Dollar",
+    exchange: "FX",
+    category: "fx",
+    tickSize: 0.0001,
+    tickValue: 10,
+    pointValue: 100000,
+    decimals: 4,
+    basePrice: 1.0885,
+    volatility: 0.0009,
+  },
+  {
+    symbol: "GBPUSD",
+    name: "British Pound / US Dollar",
+    exchange: "FX",
+    category: "fx",
+    tickSize: 0.0001,
+    tickValue: 10,
+    pointValue: 100000,
+    decimals: 4,
+    basePrice: 1.2705,
+    volatility: 0.0012,
+  },
+  {
+    symbol: "AAPL",
+    name: "Apple Inc.",
+    exchange: "NASDAQ",
+    category: "equity",
+    tickSize: 0.01,
+    tickValue: 0.01,
+    pointValue: 1,
+    decimals: 2,
+    basePrice: 246.3,
+    volatility: 0.9,
+  },
+  {
+    symbol: "TSLA",
+    name: "Tesla Inc.",
+    exchange: "NASDAQ",
+    category: "equity",
+    tickSize: 0.01,
+    tickValue: 0.01,
+    pointValue: 1,
+    decimals: 2,
+    basePrice: 328.5,
+    volatility: 3.1,
   },
 ];
 

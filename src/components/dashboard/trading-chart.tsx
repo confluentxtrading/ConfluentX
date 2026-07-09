@@ -13,11 +13,17 @@ import {
 import {
   ChevronDown,
   Eraser,
+  Eye,
+  EyeOff,
   Loader2,
+  Magnet,
   Minus,
+  MoveUpRight,
   PenLine,
   Percent,
   Plus,
+  Ruler,
+  Square,
   Undo2,
   X,
 } from "lucide-react";
@@ -69,6 +75,11 @@ function indexForTime(candles: Candle[], time: number): number {
 }
 
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+/** lucide has no vertical-line glyph — a rotated Minus reads perfectly. */
+function VerticalLineIcon({ className }: { className?: string }) {
+  return <Minus className={cn("rotate-90", className)} />;
+}
 
 const CHART_OPTIONS = {
   layout: {
@@ -149,6 +160,8 @@ export function TradingChart({
   const [showVolume, setShowVolume] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [activeTool, setActiveTool] = useState<DrawingTool>(null);
+  const [magnetMode, setMagnetMode] = useState(false);
+  const [drawingsHidden, setDrawingsHidden] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<{ last: number; changePct: number } | null>(null);
 
@@ -260,6 +273,19 @@ export function TradingChart({
         ctx.fillText(formatPrice(price, meta?.decimals ?? 2), 6, y - 4);
         return;
       }
+      if (d.kind === "vline") {
+        const time = "time" in d ? d.time : 0;
+        const x = xFor(time);
+        if (x === null) return;
+        ctx.strokeStyle = "rgba(138,92,255,0.7)";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        return;
+      }
       if (!("a" in d)) return;
       const x1 = xFor(d.a.time);
       const x2 = xFor(d.b.time);
@@ -267,22 +293,62 @@ export function TradingChart({
       const y2 = yFor(d.b.price);
       if (x1 === null || x2 === null || y1 === null || y2 === null) return;
 
-      if (d.kind === "trend") {
+      if (d.kind === "trend" || d.kind === "ray") {
         ctx.strokeStyle = "rgba(78,107,255,0.95)";
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        if (d.kind === "ray" && x2 !== x1) {
+          // Extend through b to the canvas edge.
+          const slope = (y2 - y1) / (x2 - x1);
+          const xEdge = x2 > x1 ? w : 0;
+          ctx.lineTo(xEdge, y1 + slope * (xEdge - x1));
+        } else if (d.kind === "ray") {
+          ctx.lineTo(x2, y2 > y1 ? h : 0);
+        } else {
+          ctx.lineTo(x2, y2);
+        }
         ctx.stroke();
-        for (const [px, py] of [
-          [x1, y1],
-          [x2, y2],
-        ]) {
+        for (const [px, py] of d.kind === "ray" ? [[x1, y1]] : [[x1, y1], [x2, y2]]) {
           ctx.fillStyle = "#4E6BFF";
           ctx.beginPath();
           ctx.arc(px, py, 3, 0, Math.PI * 2);
           ctx.fill();
         }
+        return;
+      }
+
+      if (d.kind === "rect") {
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(78,107,255,0.08)";
+        ctx.strokeStyle = "rgba(78,107,255,0.7)";
+        ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+        ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+        return;
+      }
+
+      if (d.kind === "measure") {
+        const dp = d.b.price - d.a.price;
+        const up = dp >= 0;
+        ctx.setLineDash([]);
+        ctx.fillStyle = up ? "rgba(46,189,133,0.12)" : "rgba(229,72,77,0.12)";
+        ctx.strokeStyle = up ? "rgba(46,189,133,0.8)" : "rgba(229,72,77,0.8)";
+        ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        const barsCount = Math.abs(indexForTime(all, d.b.time) - indexForTime(all, d.a.time));
+        const pct = d.a.price !== 0 ? (dp / d.a.price) * 100 : 0;
+        const label = `${up ? "+" : ""}${dp.toFixed(meta?.decimals ?? 2)}  (${pct.toFixed(2)}%)  ${barsCount} bars`;
+        ctx.font = "11px var(--font-geist-mono), monospace";
+        const tw = ctx.measureText(label).width;
+        const lx = Math.min(Math.max((x1 + x2) / 2 - tw / 2, 4), w - tw - 4);
+        const ly = Math.min(y1, y2) - 8;
+        ctx.fillStyle = "rgba(11,11,18,0.85)";
+        ctx.fillRect(lx - 4, ly - 12, tw + 8, 16);
+        ctx.fillStyle = up ? "#2EBD85" : "#E5484D";
+        ctx.fillText(label, lx, ly);
         return;
       }
 
@@ -312,9 +378,12 @@ export function TradingChart({
       ctx.setLineDash([]);
     };
 
-    for (const d of drawings) drawOne(d);
-    if (draftRef.current) drawOne({ kind: draftRef.current.tool, a: draftRef.current.a, b: draftRef.current.b });
-  }, [drawings, meta?.decimals, showProfile]);
+    if (!drawingsHidden) {
+      for (const d of drawings) drawOne(d);
+      if (draftRef.current)
+        drawOne({ kind: draftRef.current.tool, a: draftRef.current.a, b: draftRef.current.b });
+    }
+  }, [drawings, meta?.decimals, showProfile, drawingsHidden]);
 
   const redrawRef = useRef(redrawOverlay);
   redrawRef.current = redrawOverlay;
@@ -503,24 +572,40 @@ export function TradingChart({
     volumeSeriesRef.current?.applyOptions({ visible: showVolume });
   }, [showVolume]);
 
-  /* Redraw the overlay when drawings or the volume profile toggle change. */
+  /* Show seconds on the axis for sub-minute timeframes. */
+  useEffect(() => {
+    const secs = TIMEFRAMES.find((t) => t.value === timeframe)?.seconds ?? 300;
+    chartRef.current?.timeScale().applyOptions({ secondsVisible: secs < 60 });
+  }, [timeframe]);
+
+  /* Redraw the overlay when drawings or overlay toggles change. */
   useEffect(() => {
     redrawRef.current();
-  }, [drawings, showProfile]);
+  }, [drawings, showProfile, drawingsHidden]);
 
   /* ── Drawing tool pointer handlers ──────────────────────────────────────── */
 
-  const anchorAt = useCallback((x: number, y: number): Anchor | null => {
-    const chart = chartRef.current;
-    const series = candleSeriesRef.current;
-    const all = candlesRef.current;
-    if (!chart || !series || all.length === 0) return null;
-    const logical = chart.timeScale().coordinateToLogical(x);
-    const price = series.coordinateToPrice(y);
-    if (logical === null || price === null) return null;
-    const idx = Math.max(0, Math.min(all.length - 1, Math.round(logical)));
-    return { time: all[idx].time, price };
-  }, []);
+  const anchorAt = useCallback(
+    (x: number, y: number): Anchor | null => {
+      const chart = chartRef.current;
+      const series = candleSeriesRef.current;
+      const all = candlesRef.current;
+      if (!chart || !series || all.length === 0) return null;
+      const logical = chart.timeScale().coordinateToLogical(x);
+      const price = series.coordinateToPrice(y);
+      if (logical === null || price === null) return null;
+      const idx = Math.max(0, Math.min(all.length - 1, Math.round(logical)));
+      let snapped: number = price;
+      if (magnetMode) {
+        const c = all[idx];
+        snapped = [c.open, c.high, c.low, c.close].reduce((best, v) =>
+          Math.abs(v - price) < Math.abs(best - price) ? v : best
+        );
+      }
+      return { time: all[idx].time, price: snapped };
+    },
+    [magnetMode]
+  );
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -531,6 +616,11 @@ export function TradingChart({
 
       if (activeTool === "hline") {
         addDrawing(symbol, { id: crypto.randomUUID(), kind: "hline", price: anchor.price });
+        setActiveTool(null);
+        return;
+      }
+      if (activeTool === "vline") {
+        addDrawing(symbol, { id: crypto.randomUUID(), kind: "vline", time: anchor.time });
         setActiveTool(null);
         return;
       }
@@ -559,7 +649,7 @@ export function TradingChart({
     if (draft.a.time !== draft.b.time || draft.a.price !== draft.b.price) {
       addDrawing(symbol, {
         id: crypto.randomUUID(),
-        kind: draft.tool as "trend" | "fib",
+        kind: draft.tool as "trend" | "ray" | "rect" | "measure" | "fib",
         a: draft.a,
         b: draft.b,
       });
@@ -584,8 +674,12 @@ export function TradingChart({
 
   const toolButtons: { tool: Exclude<DrawingTool, null>; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { tool: "trend", label: "Trendline", icon: PenLine },
+    { tool: "ray", label: "Ray (extended trendline)", icon: MoveUpRight },
     { tool: "hline", label: "Horizontal level", icon: Minus },
+    { tool: "vline", label: "Vertical line", icon: VerticalLineIcon },
+    { tool: "rect", label: "Rectangle zone", icon: Square },
     { tool: "fib", label: "Fib retracement", icon: Percent },
+    { tool: "measure", label: "Measure (price / % / bars)", icon: Ruler },
   ];
 
   return (
@@ -705,6 +799,25 @@ export function TradingChart({
               <Icon className="size-3.5" />
             </button>
           ))}
+          <button
+            title="Magnet mode — snap drawings to OHLC"
+            onClick={() => setMagnetMode((v) => !v)}
+            className={cn(
+              "rounded-lg p-1.5 transition-colors",
+              magnetMode
+                ? "bg-brand-violet/20 text-brand-lilac"
+                : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+            )}
+          >
+            <Magnet className="size-3.5" />
+          </button>
+          <button
+            title={drawingsHidden ? "Show drawings" : "Hide drawings"}
+            onClick={() => setDrawingsHidden((v) => !v)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+          >
+            {drawingsHidden ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+          </button>
           <button
             title="Undo last drawing"
             onClick={() => undoDrawing(symbol)}

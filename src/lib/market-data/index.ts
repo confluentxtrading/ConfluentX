@@ -12,3 +12,4 @@ export const marketData: MarketDataProvider = mockProvider;
 
 export * from "./types";
 export { FUTURES_SYMBOLS, DEFAULT_WATCHLIST } from "./symbols";
+export { aggregateCandles, resampleTo } from "./resample";
