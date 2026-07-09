@@ -1,7 +1,12 @@
 import { z } from "zod";
 
 import { apiError, apiSuccess, requireSession } from "@/lib/api";
-import { marketData, TIMEFRAME_VALUES, type Timeframe } from "@/lib/market-data";
+import {
+  getCandlesAsync,
+  marketData,
+  TIMEFRAME_VALUES,
+  type Timeframe,
+} from "@/lib/market-data";
 
 const querySchema = z.object({
   symbol: z.string().min(1).max(6),
@@ -25,6 +30,6 @@ export async function GET(req: Request) {
   const meta = marketData.getSymbol(symbol);
   if (!meta) return apiError(`Unknown symbol: ${symbol}`, 404);
 
-  const candles = marketData.getCandles(symbol, timeframe as Timeframe, count);
-  return apiSuccess({ symbol: meta.symbol, timeframe, meta, candles });
+  const { candles, live } = await getCandlesAsync(symbol, timeframe as Timeframe, count);
+  return apiSuccess({ symbol: meta.symbol, timeframe, meta, candles, live });
 }

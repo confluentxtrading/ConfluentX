@@ -11,7 +11,7 @@ import {
   RiskMetrics,
 } from "@/components/dashboard/widgets";
 import { db } from "@/lib/db";
-import { DEFAULT_WATCHLIST, FUTURES_SYMBOLS, marketData } from "@/lib/market-data";
+import { DEFAULT_WATCHLIST, FUTURES_SYMBOLS, getQuotesAsync } from "@/lib/market-data";
 import { getDashboardData } from "@/lib/mock/dashboard";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -30,8 +30,10 @@ export default async function DashboardPage() {
   const watchlistSymbols =
     items.length > 0 ? items.map((i) => i.symbol) : DEFAULT_WATCHLIST;
 
-  const watchlistQuotes = marketData.getQuotes(watchlistSymbols);
-  const moverQuotes = marketData.getQuotes(FUTURES_SYMBOLS.map((s) => s.symbol));
+  const [watchlistQuotes, moverQuotes] = await Promise.all([
+    getQuotesAsync(watchlistSymbols),
+    getQuotesAsync(FUTURES_SYMBOLS.map((s) => s.symbol)),
+  ]);
 
   const firstName = session?.user?.name?.split(" ")[0] ?? "Trader";
 

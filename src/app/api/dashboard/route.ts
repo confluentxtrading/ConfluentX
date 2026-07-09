@@ -1,6 +1,6 @@
 import { apiError, apiSuccess, requireSession } from "@/lib/api";
 import { db } from "@/lib/db";
-import { DEFAULT_WATCHLIST, FUTURES_SYMBOLS, marketData } from "@/lib/market-data";
+import { DEFAULT_WATCHLIST, FUTURES_SYMBOLS, getQuotesAsync } from "@/lib/market-data";
 import { getDashboardData } from "@/lib/mock/dashboard";
 
 /** Aggregated payload for the dashboard overview. */
@@ -18,9 +18,10 @@ export async function GET() {
 
   const data = getDashboardData();
 
-  return apiSuccess({
-    ...data,
-    watchlist: marketData.getQuotes(watchlistSymbols),
-    movers: marketData.getQuotes(FUTURES_SYMBOLS.map((s) => s.symbol)),
-  });
+  const [watchlist, movers] = await Promise.all([
+    getQuotesAsync(watchlistSymbols),
+    getQuotesAsync(FUTURES_SYMBOLS.map((s) => s.symbol)),
+  ]);
+
+  return apiSuccess({ ...data, watchlist, movers });
 }

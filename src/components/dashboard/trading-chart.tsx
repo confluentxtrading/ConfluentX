@@ -23,6 +23,7 @@ import {
   Percent,
   Plus,
   Ruler,
+  SlidersHorizontal,
   Square,
   Undo2,
   X,
@@ -48,6 +49,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CHART_TIMEZONES, tzOffsetSeconds, type ChartTimezone } from "@/lib/timezone";
 import { useCharts, type Anchor, type Drawing, type DrawingTool } from "@/store/charts";
 
 /* ── Small helpers ────────────────────────────────────────────────────────── */
@@ -148,7 +150,7 @@ export function TradingChart({
 
   const chartRef = useRef<IChartApi | null>(null);
   const oscChartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | ISeriesApi<"Bar"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const instanceSeriesRef = useRef<Map<string, ISeriesApi<"Line" | "Histogram">[]>>(new Map());
   const candlesRef = useRef<Candle[]>([]);
@@ -171,6 +173,18 @@ export function TradingChart({
   const [activeTool, setActiveTool] = useState<DrawingTool>(null);
   const [magnetMode, setMagnetMode] = useState(false);
   const [drawingsHidden, setDrawingsHidden] = useState(false);
+  const [chartStyle, setChartStyle] = useState<"candles" | "bars">("candles");
+  const [upColor, setUpColor] = useState("#2EBD85");
+  const [downColor, setDownColor] = useState("#E5484D");
+  const [showGrid, setShowGrid] = useState(true);
+  const [showLegend, setShowLegend] = useState(true);
+  const [timezone, setTimezone] = useState<ChartTimezone>("Etc/UTC");
+  const [crosshairBar, setCrosshairBar] = useState<{
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<{ last: number; changePct: number } | null>(null);
 
@@ -184,6 +198,20 @@ export function TradingChart({
   const hasOscillators = useMemo(
     () => indicators.some((i) => getIndicator(i.type)?.pane === "oscillator"),
     [indicators]
+  );
+
+  /* Timezone display shift: series get shifted times, overlays stay on raw
+     bar indices so drawings/killzones never move. */
+  const tzOffset = useMemo(
+    () =>
+      candles.length === 0
+        ? 0
+        : tzOffsetSeconds(timezone, new Date(candles[candles.length - 1].time * 1000)),
+    [timezone, candles]
+  );
+  const displayCandles = useMemo(
+    () => (tzOffset === 0 ? candles : candles.map((c) => ({ ...c, time: c.time + tzOffset }))),
+    [candles, tzOffset]
   );
 
   /* ── Drawing overlay rendering ──────────────────────────────────────────── */
@@ -450,14 +478,7 @@ export function TradingChart({
       timeScale: { ...CHART_OPTIONS.timeScale, visible: false },
     });
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: "#2EBD85",
-      downColor: "#E5484D",
-      borderUpColor: "#2EBD85",
-      borderDownColor: "#E5484D",
-      wickUpColor: "rgba(46,189,133,0.7)",
-      wickDownColor: "rgba(229,72,77,0.7)",
-    });
+    // Price series is owned by the style effect (candles ↔ bars switch).
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
@@ -477,12 +498,26 @@ export function TradingChart({
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => redrawRef.current());
 
+    // OHLC status line follows the crosshair.
+    chart.subscribeCrosshairMove((param) => {
+      const s = candleSeriesRef.current;
+      const sd = s
+        ? (param.seriesData.get(s) as
+            | { open?: number; high?: number; low?: number; close?: number }
+            | undefined)
+        : undefined;
+      if (sd && sd.open !== undefined) {
+        setCrosshairBar({ open: sd.open, high: sd.high!, low: sd.low!, close: sd.close! });
+      } else {
+        setCrosshairBar(null);
+      }
+    });
+
     const resizeObserver = new ResizeObserver(() => redrawRef.current());
     resizeObserver.observe(el);
 
     chartRef.current = chart;
     oscChartRef.current = oscChart;
-    candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
     return () => {
@@ -518,14 +553,52 @@ export function TradingChart({
     return () => clearInterval(id);
   }, [loadData]);
 
-  /* ── Base series data ───────────────────────────────────────────────────── */
+  /* ── Base series ────────────────────────────────────────────────────────── */
+
+  /* Overlay math (drawings, killzones, VP) always keys off raw UTC candles. */
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
+
+  /* Price series creation — owns the candles ↔ bars style and colors. */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (candleSeriesRef.current) {
+      try {
+        chart.removeSeries(candleSeriesRef.current);
+      } catch {
+        /* chart already torn down */
+      }
+    }
+    candleSeriesRef.current =
+      chartStyle === "bars"
+        ? chart.addBarSeries({ upColor, downColor, thinBars: false })
+        : chart.addCandlestickSeries({
+            upColor,
+            downColor,
+            borderUpColor: upColor,
+            borderDownColor: downColor,
+            wickUpColor: withAlpha(upColor, 0.7),
+            wickDownColor: withAlpha(downColor, 0.7),
+          });
+  }, [chartStyle, upColor, downColor]);
+
+  /* Grid visibility. */
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      grid: {
+        vertLines: { visible: showGrid, color: "rgba(255,255,255,0.04)" },
+        horzLines: { visible: showGrid, color: "rgba(255,255,255,0.04)" },
+      },
+    });
+  }, [showGrid]);
 
   useEffect(() => {
-    if (candles.length === 0) return;
-    candlesRef.current = candles;
+    if (displayCandles.length === 0) return;
 
     candleSeriesRef.current?.setData(
-      candles.map((c) => ({
+      displayCandles.map((c) => ({
         time: c.time as UTCTimestamp,
         open: c.open,
         high: c.high,
@@ -534,25 +607,26 @@ export function TradingChart({
       }))
     );
     volumeSeriesRef.current?.setData(
-      candles.map((c) => ({
+      displayCandles.map((c) => ({
         time: c.time as UTCTimestamp,
         value: c.volume,
-        color: c.close >= c.open ? "rgba(46,189,133,0.35)" : "rgba(229,72,77,0.35)",
+        color: c.close >= c.open ? withAlpha(upColor, 0.35) : withAlpha(downColor, 0.35),
       }))
     );
     chartRef.current?.timeScale().fitContent();
 
-    const last = candles[candles.length - 1];
-    const first = candles[0];
+    const last = displayCandles[displayCandles.length - 1];
+    const first = displayCandles[0];
     setStats({ last: last.close, changePct: ((last.close - first.open) / first.open) * 100 });
     redrawRef.current();
-  }, [candles]);
+  }, [displayCandles, chartStyle, upColor, downColor]);
 
   /* ── Indicator instances → chart series ─────────────────────────────────── */
 
   useEffect(() => {
     const chart = chartRef.current;
     const oscChart = oscChartRef.current;
+    const candles = displayCandles; // series times must match the price series
     if (!chart || !oscChart || candles.length === 0) return;
 
     // Tear down previous instance series.
@@ -614,7 +688,7 @@ export function TradingChart({
       }
       instanceSeriesRef.current.set(inst.id, seriesList);
     }
-  }, [indicators, candles]);
+  }, [indicators, displayCandles]);
 
   /* Volume visibility. */
   useEffect(() => {
@@ -841,6 +915,88 @@ export function TradingChart({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* Chart settings */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            title="Chart settings"
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground focus:outline-none"
+          >
+            <SlidersHorizontal className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56 space-y-2 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">Style</span>
+              <div className="flex gap-0.5">
+                {(["candles", "bars"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setChartStyle(s)}
+                    className={cn(
+                      "rounded-md px-2 py-0.5 font-mono text-[10px] capitalize",
+                      chartStyle === s
+                        ? "bg-brand-violet/15 text-brand-lilac"
+                        : "text-muted-foreground hover:bg-white/5"
+                    )}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">Up / down</span>
+              <div className="flex gap-1.5">
+                <input
+                  type="color"
+                  value={upColor}
+                  onChange={(e) => setUpColor(e.target.value)}
+                  className="size-6 cursor-pointer rounded border-none bg-transparent"
+                  aria-label="Up color"
+                />
+                <input
+                  type="color"
+                  value={downColor}
+                  onChange={(e) => setDownColor(e.target.value)}
+                  className="size-6 cursor-pointer rounded border-none bg-transparent"
+                  aria-label="Down color"
+                />
+              </div>
+            </div>
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              Grid lines
+              <input
+                type="checkbox"
+                checked={showGrid}
+                onChange={(e) => setShowGrid(e.target.checked)}
+                className="accent-brand-violet"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              OHLC status line
+              <input
+                type="checkbox"
+                checked={showLegend}
+                onChange={(e) => setShowLegend(e.target.checked)}
+                className="accent-brand-violet"
+              />
+            </label>
+            <div className="space-y-1">
+              <span className="text-xs text-muted-foreground">Timezone</span>
+              <select
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value as ChartTimezone)}
+                className="h-7 w-full rounded-md border border-white/8 bg-white/5 px-1.5 font-mono text-[11px] text-foreground focus:outline-none [&>option]:bg-surface"
+              >
+                {CHART_TIMEZONES.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <div className="mx-1 h-5 w-px bg-white/8" />
 
         {/* Drawing tools */}
@@ -933,6 +1089,25 @@ export function TradingChart({
       {/* Main chart + drawing overlay */}
       <div className="relative min-h-0 flex-1">
         <div ref={containerRef} className="absolute inset-0" />
+        {showLegend && displayCandles.length > 0
+          ? (() => {
+              const bar = crosshairBar ?? displayCandles[displayCandles.length - 1];
+              const up = bar.close >= bar.open;
+              return (
+                <div className="pointer-events-none absolute left-2 top-1.5 z-20 flex gap-2 font-mono text-[10px]">
+                  <span className="font-semibold text-foreground">{symbol}</span>
+                  {(["open", "high", "low", "close"] as const).map((k) => (
+                    <span key={k} className="text-muted-foreground">
+                      {k[0].toUpperCase()}
+                      <span className={cn("ml-0.5 tabular", up ? "text-up" : "text-down")}>
+                        {formatPrice(bar[k], meta?.decimals ?? 2)}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              );
+            })()
+          : null}
         <canvas
           ref={overlayRef}
           onPointerDown={onPointerDown}

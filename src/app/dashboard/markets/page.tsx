@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 
-import { FUTURES_SYMBOLS, marketData } from "@/lib/market-data";
+import { FUTURES_SYMBOLS, getQuotesAsync } from "@/lib/market-data";
 import { cn, formatCompact, formatPercent, formatPrice } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Markets" };
@@ -18,8 +18,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   equity: "Stocks",
 };
 
-export default function MarketsPage() {
-  const quotes = marketData.getQuotes(FUTURES_SYMBOLS.map((s) => s.symbol));
+export default async function MarketsPage() {
+  const quotes = await getQuotesAsync(FUTURES_SYMBOLS.map((s) => s.symbol));
 
   return (
     <div className="space-y-4">
