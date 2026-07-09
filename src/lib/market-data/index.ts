@@ -9,6 +9,7 @@
  */
 import { cacheGet, cacheSet, ttlForTimeframe } from "./cache";
 import { getCryptoCandles, getCryptoQuote, isLiveCrypto } from "./live-crypto";
+import { getDatabentoCandles, hasDatabentoKey, isDatabentoSymbol } from "./live-databento";
 import { getYahooCandles, getYahooQuote, isLiveYahoo } from "./live-yahoo";
 import { mockProvider } from "./mock-provider";
 import { TIMEFRAMES, type Candle, type MarketDataProvider, type Quote, type Timeframe } from "./types";
@@ -29,6 +30,16 @@ export async function getCandlesAsync(
     let raw: Candle[] = [];
     if (isLiveCrypto(symbol)) {
       raw = await getCryptoCandles(symbol, timeframe, count);
+    } else if (isDatabentoSymbol(symbol) && hasDatabentoKey()) {
+      // Professional CME feed — active only when DATABENTO_API_KEY is set.
+      try {
+        raw = await getDatabentoCandles(symbol, timeframe, count);
+      } catch (error) {
+        console.error(`[market-data] Databento failed for ${symbol}, trying Yahoo:`, error);
+      }
+      if (raw.length === 0 && isLiveYahoo(symbol)) {
+        raw = await getYahooCandles(symbol, timeframe, count);
+      }
     } else if (isLiveYahoo(symbol)) {
       // Yahoo has no sub-minute bars — those fall through to the mock.
       raw = await getYahooCandles(symbol, timeframe, count);
