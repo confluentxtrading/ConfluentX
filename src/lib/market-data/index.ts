@@ -7,10 +7,12 @@
  * `getCandlesAsync` / `getQuotesAsync` wrappers — they pick the live feed per
  * symbol and always fall back to the mock on feed errors.
  */
+import { cacheGet, cacheSet, ttlForTimeframe } from "./cache";
 import { getCryptoCandles, getCryptoQuote, isLiveCrypto } from "./live-crypto";
 import { getYahooCandles, getYahooQuote, isLiveYahoo } from "./live-yahoo";
 import { mockProvider } from "./mock-provider";
-import type { Candle, MarketDataProvider, Quote, Timeframe } from "./types";
+import { TIMEFRAMES, type Candle, type MarketDataProvider, type Quote, type Timeframe } from "./types";
+import { validateCandles } from "./validate";
 
 export const marketData: MarketDataProvider = mockProvider;
 
@@ -19,14 +21,28 @@ export async function getCandlesAsync(
   timeframe: Timeframe,
   count: number
 ): Promise<{ candles: Candle[]; live: boolean }> {
+  const key = `${symbol.toUpperCase()}|${timeframe}|${count}`;
+  const cached = cacheGet(key);
+  if (cached) return cached;
+
   try {
+    let raw: Candle[] = [];
     if (isLiveCrypto(symbol)) {
-      const candles = await getCryptoCandles(symbol, timeframe, count);
-      if (candles.length > 0) return { candles, live: true };
+      raw = await getCryptoCandles(symbol, timeframe, count);
     } else if (isLiveYahoo(symbol)) {
       // Yahoo has no sub-minute bars — those fall through to the mock.
-      const candles = await getYahooCandles(symbol, timeframe, count);
-      if (candles.length > 0) return { candles, live: true };
+      raw = await getYahooCandles(symbol, timeframe, count);
+    }
+    if (raw.length > 0) {
+      const { candles, report } = validateCandles(raw);
+      if (report.droppedInvalid > 0 || report.droppedDuplicates > 0 || report.reordered) {
+        console.warn(`[market-data] ${symbol} ${timeframe} cleaned:`, report);
+      }
+      if (candles.length > 0) {
+        const tfSecs = TIMEFRAMES.find((t) => t.value === timeframe)?.seconds ?? 300;
+        cacheSet(key, candles, true, ttlForTimeframe(tfSecs));
+        return { candles, live: true };
+      }
     }
   } catch (error) {
     console.error(`[market-data] live feed failed for ${symbol}, using mock:`, error);

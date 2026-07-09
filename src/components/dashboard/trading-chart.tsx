@@ -42,6 +42,7 @@ import {
   type Candle,
   type Timeframe,
 } from "@/lib/market-data";
+import { canStream, subscribeKline } from "@/lib/market-data/streaming";
 import { cn, formatPercent, formatPrice } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -189,7 +190,10 @@ export function TradingChart({
     close: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLive, setIsLive] = useState(false);
   const [stats, setStats] = useState<{ last: number; changePct: number } | null>(null);
+  const fitKeyRef = useRef("");
+  const tzOffsetRef = useRef(0);
 
   const drawingsForSymbol = useCharts((s) => s.drawings[symbol]);
   const drawings = drawingsForSymbol ?? NO_DRAWINGS;
@@ -542,8 +546,9 @@ export function TradingChart({
     try {
       const res = await fetch(`/api/chart?symbol=${symbol}&timeframe=${timeframe}&count=${bars}`);
       if (!res.ok) return;
-      const data = (await res.json()) as { candles: Candle[] };
+      const data = (await res.json()) as { candles: Candle[]; live?: boolean };
       if (data.candles.length === 0) return;
+      setIsLive(Boolean(data.live));
       setCandles(data.candles);
     } finally {
       setLoading(false);
@@ -600,6 +605,14 @@ export function TradingChart({
   useEffect(() => {
     if (displayCandles.length === 0) return;
 
+    // Preserve the user's pan/zoom on background refreshes — only fit the
+    // view when the dataset identity (symbol/timeframe/depth) changes.
+    const fitKey = `${symbol}|${timeframe}|${bars}`;
+    const keepRange =
+      fitKeyRef.current === fitKey
+        ? chartRef.current?.timeScale().getVisibleLogicalRange()
+        : null;
+
     candleSeriesRef.current?.setData(
       displayCandles.map((c) => ({
         time: c.time as UTCTimestamp,
@@ -616,13 +629,18 @@ export function TradingChart({
         color: c.close >= c.open ? withAlpha(upColor, 0.35) : withAlpha(downColor, 0.35),
       }))
     );
-    chartRef.current?.timeScale().fitContent();
+    if (keepRange) {
+      chartRef.current?.timeScale().setVisibleLogicalRange(keepRange);
+    } else {
+      fitKeyRef.current = fitKey;
+      chartRef.current?.timeScale().fitContent();
+    }
 
     const last = displayCandles[displayCandles.length - 1];
     const first = displayCandles[0];
     setStats({ last: last.close, changePct: ((last.close - first.open) / first.open) * 100 });
     redrawRef.current();
-  }, [displayCandles, chartStyle, upColor, downColor]);
+  }, [displayCandles, chartStyle, upColor, downColor, symbol, timeframe, bars]);
 
   /* ── Indicator instances → chart series ─────────────────────────────────── */
 
@@ -697,6 +715,59 @@ export function TradingChart({
   useEffect(() => {
     volumeSeriesRef.current?.applyOptions({ visible: showVolume });
   }, [showVolume]);
+
+  /* ── Real-time streaming (crypto via Binance WebSocket) ─────────────────── */
+
+  useEffect(() => {
+    tzOffsetRef.current = tzOffset;
+  }, [tzOffset]);
+
+  useEffect(() => {
+    if (!canStream(symbol, timeframe)) return;
+    const unsubscribe = subscribeKline(symbol, timeframe, (bar) => {
+      const all = candlesRef.current;
+      if (all.length === 0) return;
+      const last = all[all.length - 1];
+      if (bar.time < last.time) return; // stale tick from a previous interval
+
+      // Keep the raw ref current for overlays (measure, killzones, VP).
+      const candle: Candle = {
+        time: bar.time,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume,
+      };
+      if (bar.time === last.time) all[all.length - 1] = candle;
+      else all.push(candle);
+
+      // Paint the tick directly — no React churn per update.
+      const t = (bar.time + tzOffsetRef.current) as UTCTimestamp;
+      candleSeriesRef.current?.update({
+        time: t,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+      });
+      volumeSeriesRef.current?.update({
+        time: t,
+        value: bar.volume,
+        color:
+          bar.close >= bar.open ? withAlpha(upColor, 0.35) : withAlpha(downColor, 0.35),
+      });
+      const first = all[0];
+      setStats({
+        last: bar.close,
+        changePct: ((bar.close - first.open) / first.open) * 100,
+      });
+
+      // On bar close, sync React state so indicators recompute on final data.
+      if (bar.closed) setCandles([...all]);
+    });
+    return unsubscribe;
+  }, [symbol, timeframe, upColor, downColor]);
 
   /* Show seconds on the axis for sub-minute timeframes. */
   useEffect(() => {
@@ -1105,6 +1176,21 @@ export function TradingChart({
         </div>
 
         <div className="ml-auto flex items-center gap-3 font-mono text-xs">
+          <span
+            title={
+              isLive
+                ? canStream(symbol, timeframe)
+                  ? "Real market data, streaming live"
+                  : "Real market data (delayed ~15 min)"
+                : "Simulated data — no free source exists for this symbol/timeframe"
+            }
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wider",
+              isLive ? "bg-up/10 text-up" : "bg-[#E5B93C]/10 text-[#E5B93C]"
+            )}
+          >
+            {isLive ? (canStream(symbol, timeframe) ? "LIVE" : "REAL·DLY") : "SIM"}
+          </span>
           {stats ? (
             <>
               <span className="tabular text-foreground">{formatPrice(stats.last, meta?.decimals ?? 2)}</span>

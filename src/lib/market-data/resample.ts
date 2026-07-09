@@ -11,20 +11,54 @@ import { TIMEFRAMES, type Candle, type Timeframe } from "./types";
  * O(n), allocation-light — comfortable with 100k+ input bars in a request
  * handler or a Web Worker.
  */
+const WEEK = 604800;
+const MONTH_APPROX = 2629800;
+const YEAR_APPROX = 31557600;
+
+/**
+ * Bucket id for a timestamp. Fixed intervals use flat division; calendar
+ * intervals (week/month/year) must align to real calendar boundaries —
+ * flat division would start weeks on Thursday (the epoch's weekday) and
+ * drift months/years.
+ */
+function bucketFor(time: number, targetSeconds: number): number {
+  if (targetSeconds === WEEK) {
+    // Align to Monday 00:00 UTC. Epoch (Jan 1 1970) was a Thursday: shift 3 days.
+    return Math.floor((time + 3 * 86400) / WEEK);
+  }
+  if (targetSeconds === MONTH_APPROX || targetSeconds === YEAR_APPROX) {
+    const d = new Date(time * 1000);
+    return targetSeconds === MONTH_APPROX
+      ? d.getUTCFullYear() * 12 + d.getUTCMonth()
+      : d.getUTCFullYear();
+  }
+  return Math.floor(time / targetSeconds);
+}
+
+/** Canonical open-time for a bucket id (inverse of bucketFor). */
+function bucketStart(bucket: number, targetSeconds: number): number {
+  if (targetSeconds === WEEK) return bucket * WEEK - 3 * 86400;
+  if (targetSeconds === MONTH_APPROX) {
+    return Date.UTC(Math.floor(bucket / 12), bucket % 12, 1) / 1000;
+  }
+  if (targetSeconds === YEAR_APPROX) return Date.UTC(bucket, 0, 1) / 1000;
+  return bucket * targetSeconds;
+}
+
 export function aggregateCandles(candles: Candle[], targetSeconds: number): Candle[] {
   if (candles.length === 0 || targetSeconds <= 0) return [];
 
   const out: Candle[] = [];
-  let bucket = -1;
+  let bucket = Number.NaN;
   let current: Candle | null = null;
 
   for (const c of candles) {
-    const b = Math.floor(c.time / targetSeconds);
+    const b = bucketFor(c.time, targetSeconds);
     if (b !== bucket) {
       if (current) out.push(current);
       bucket = b;
       current = {
-        time: b * targetSeconds,
+        time: bucketStart(b, targetSeconds),
         open: c.open,
         high: c.high,
         low: c.low,
