@@ -178,6 +178,9 @@ export function TradingChart({
   const [downColor, setDownColor] = useState("#E5484D");
   const [showGrid, setShowGrid] = useState(true);
   const [showLegend, setShowLegend] = useState(true);
+  const [showCountdown, setShowCountdown] = useState(false);
+  const [showWatermark, setShowWatermark] = useState(false);
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const [timezone, setTimezone] = useState<ChartTimezone>("Etc/UTC");
   const [crosshairBar, setCrosshairBar] = useState<{
     open: number;
@@ -701,6 +704,38 @@ export function TradingChart({
     chartRef.current?.timeScale().applyOptions({ secondsVisible: secs < 60 });
   }, [timeframe]);
 
+  /* Symbol watermark. */
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      watermark: {
+        visible: showWatermark,
+        text: symbol,
+        color: "rgba(244,245,250,0.05)",
+        fontSize: 64,
+        fontFamily: "var(--font-geist-mono), monospace",
+      },
+    });
+  }, [showWatermark, symbol]);
+
+  /* 1s tick that drives the bar-close countdown. */
+  useEffect(() => {
+    if (!showCountdown) return;
+    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [showCountdown]);
+
+  const countdown = useMemo(() => {
+    if (!showCountdown || candles.length === 0) return null;
+    const tfSecs = TIMEFRAMES.find((t) => t.value === timeframe)?.seconds ?? 300;
+    if (tfSecs > 86400) return null;
+    const remaining = Math.max(0, candles[candles.length - 1].time + tfSecs - nowSec);
+    const h = Math.floor(remaining / 3600);
+    const m = Math.floor((remaining % 3600) / 60);
+    const s = remaining % 60;
+    const pad = (v: number) => String(v).padStart(2, "0");
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }, [showCountdown, candles, timeframe, nowSec]);
+
   /* Redraw the overlay when drawings or overlay toggles change. */
   useEffect(() => {
     redrawRef.current();
@@ -980,6 +1015,24 @@ export function TradingChart({
                 className="accent-brand-violet"
               />
             </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              Bar close countdown
+              <input
+                type="checkbox"
+                checked={showCountdown}
+                onChange={(e) => setShowCountdown(e.target.checked)}
+                className="accent-brand-violet"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              Symbol watermark
+              <input
+                type="checkbox"
+                checked={showWatermark}
+                onChange={(e) => setShowWatermark(e.target.checked)}
+                className="accent-brand-violet"
+              />
+            </label>
             <div className="space-y-1">
               <span className="text-xs text-muted-foreground">Timezone</span>
               <select
@@ -1104,6 +1157,9 @@ export function TradingChart({
                       </span>
                     </span>
                   ))}
+                  {countdown ? (
+                    <span className="text-brand-lilac">⏱ {countdown}</span>
+                  ) : null}
                 </div>
               );
             })()

@@ -8,6 +8,7 @@
  * symbol and always fall back to the mock on feed errors.
  */
 import { getCryptoCandles, getCryptoQuote, isLiveCrypto } from "./live-crypto";
+import { getYahooCandles, getYahooQuote, isLiveYahoo } from "./live-yahoo";
 import { mockProvider } from "./mock-provider";
 import type { Candle, MarketDataProvider, Quote, Timeframe } from "./types";
 
@@ -18,13 +19,17 @@ export async function getCandlesAsync(
   timeframe: Timeframe,
   count: number
 ): Promise<{ candles: Candle[]; live: boolean }> {
-  if (isLiveCrypto(symbol)) {
-    try {
+  try {
+    if (isLiveCrypto(symbol)) {
       const candles = await getCryptoCandles(symbol, timeframe, count);
       if (candles.length > 0) return { candles, live: true };
-    } catch (error) {
-      console.error(`[market-data] live feed failed for ${symbol}, using mock:`, error);
+    } else if (isLiveYahoo(symbol)) {
+      // Yahoo has no sub-minute bars — those fall through to the mock.
+      const candles = await getYahooCandles(symbol, timeframe, count);
+      if (candles.length > 0) return { candles, live: true };
     }
+  } catch (error) {
+    console.error(`[market-data] live feed failed for ${symbol}, using mock:`, error);
   }
   return { candles: mockProvider.getCandles(symbol, timeframe, count), live: false };
 }
@@ -32,12 +37,11 @@ export async function getCandlesAsync(
 export async function getQuotesAsync(symbols: string[]): Promise<Quote[]> {
   return Promise.all(
     symbols.map(async (s) => {
-      if (isLiveCrypto(s)) {
-        try {
-          return await getCryptoQuote(s);
-        } catch (error) {
-          console.error(`[market-data] live quote failed for ${s}, using mock:`, error);
-        }
+      try {
+        if (isLiveCrypto(s)) return await getCryptoQuote(s);
+        if (isLiveYahoo(s)) return await getYahooQuote(s);
+      } catch (error) {
+        console.error(`[market-data] live quote failed for ${s}, using mock:`, error);
       }
       return mockProvider.getQuote(s);
     })
