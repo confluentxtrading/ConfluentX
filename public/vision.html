@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ConfluentX — The Spatial AI Trading Studio</title>
+<meta name="description" content="Break out of the second dimension. ConfluentX renders the market as a living 3D structure." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --void: #010204;
+    --midnight: #0B0E16;
+    --cyan: #00E5FF;
+    --purple: #7000FF;
+    --white: #FFFFFF;
+    --slate: #8A96B1;
+    --green: #00FF66;
+    --red: #FF3366;
+    --font-display: "Cormorant Garamond", serif;
+    --font-body: "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--void);
+    color: var(--white);
+    font-family: var(--font-body);
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(0,229,255,0.3); }
+
+  /* ── Navigation ─────────────────────────────────────────────── */
+  .nav {
+    position: fixed; inset: 0 0 auto 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px clamp(20px, 4vw, 56px);
+    background: linear-gradient(to bottom, rgba(1,2,4,0.85), rgba(1,2,4,0));
+    backdrop-filter: blur(2px);
+  }
+  .nav.scrolled {
+    background: rgba(3,5,10,0.72);
+    backdrop-filter: blur(18px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .logo {
+    font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.14em;
+    font-size: 15px; color: var(--white); text-decoration: none;
+  }
+  .logo em {
+    font-style: normal; color: var(--cyan);
+    text-shadow: 0 0 12px rgba(0,229,255,0.9), 0 0 32px rgba(0,229,255,0.4);
+  }
+  .nav-right { display: flex; align-items: center; gap: 26px; }
+  .nav-link {
+    color: var(--slate); text-decoration: none; font-size: 14px; font-weight: 500;
+    transition: color .25s;
+  }
+  .nav-link:hover { color: var(--white); }
+  .btn {
+    display: inline-block; text-decoration: none; font-weight: 600; font-size: 14px;
+    padding: 10px 22px; border-radius: 10px; transition: all .3s cubic-bezier(.2,.8,.2,1);
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .btn-primary {
+    background: linear-gradient(120deg, var(--cyan), var(--purple));
+    color: #010204; font-weight: 700;
+    box-shadow: 0 0 24px rgba(0,229,255,0.25);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 42px rgba(0,229,255,0.5); }
+  .btn-ghost {
+    border-color: rgba(255,255,255,0.18); color: var(--white);
+    background: rgba(255,255,255,0.03); backdrop-filter: blur(8px);
+  }
+  .btn-ghost:hover { border-color: rgba(0,229,255,0.6); background: rgba(0,229,255,0.06); }
+
+  /* ── Cinematic film ─────────────────────────────────────────── */
+  #film { height: 560vh; position: relative; }
+  #stage { position: sticky; top: 0; height: 100vh; width: 100%; overflow: hidden; }
+  #screen { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .beat {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: clamp(56px, 12vh, 130px);
+    width: min(820px, 88vw); text-align: center;
+    opacity: 0; transition: opacity .18s linear; pointer-events: none;
+    z-index: 5;
+  }
+  .beat h2 {
+    font-family: var(--font-display); font-weight: 500;
+    font-size: clamp(26px, 4.2vw, 52px); line-height: 1.12;
+    text-shadow: 0 2px 30px rgba(0,0,0,0.9);
+  }
+  .beat h2 .hl { color: var(--cyan); font-style: italic; }
+  .beat p {
+    margin-top: 14px; color: var(--slate); font-size: clamp(13px, 1.4vw, 16px);
+    font-family: var(--font-mono); letter-spacing: 0.02em;
+  }
+  #stopbanner {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(255,51,102,0.08); opacity: 0; z-index: 6; pointer-events: none;
+  }
+  #stopbanner span {
+    font-family: var(--font-mono); font-weight: 700;
+    font-size: clamp(22px, 4.4vw, 56px); letter-spacing: 0.12em;
+    color: var(--red); border: 2px solid var(--red); padding: 18px 34px;
+    background: rgba(1,2,4,0.75);
+    box-shadow: 0 0 60px rgba(255,51,102,0.55), inset 0 0 30px rgba(255,51,102,0.18);
+  }
+  .scroll-hint {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .3em;
+    color: var(--slate); z-index: 5; animation: hint 2.2s ease-in-out infinite;
+  }
+  @keyframes hint { 0%,100% { opacity: .35; transform: translate(-50%,0);} 50% { opacity: 1; transform: translate(-50%,6px);} }
+
+  /* ── Shared section styling ─────────────────────────────────── */
+  .section { position: relative; padding: clamp(80px, 12vh, 150px) clamp(20px, 5vw, 64px); max-width: 1280px; margin: 0 auto; }
+  .kicker {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.28em;
+    color: var(--cyan); text-transform: uppercase; margin-bottom: 18px;
+  }
+  .h-major {
+    font-family: var(--font-display); font-weight: 500;
+    font-size: clamp(34px, 4.6vw, 64px); line-height: 1.08; max-width: 780px;
+  }
+  .sub { color: var(--slate); font-size: clamp(15px, 1.5vw, 18px); line-height: 1.7; max-width: 620px; margin-top: 20px; }
+  .glass {
+    background: linear-gradient(160deg, rgba(255,255,255,0.055), rgba(255,255,255,0.015));
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 20px; backdrop-filter: blur(20px);
+  }
+
+  /* ── AI chat ────────────────────────────────────────────────── */
+  .chat-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; margin-top: 64px; }
+  .chat-window { padding: 0; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 0 60px rgba(112,0,255,0.12); }
+  .chat-head {
+    display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    font-family: var(--font-mono); font-size: 12px; color: var(--slate); letter-spacing: .08em;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .chat-body { padding: 22px 20px 26px; display: flex; flex-direction: column; gap: 16px; min-height: 260px; }
+  .msg { max-width: 88%; padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.55; }
+  .msg.user {
+    align-self: flex-end; background: rgba(0,229,255,0.09);
+    border: 1px solid rgba(0,229,255,0.25); color: var(--white);
+  }
+  .msg.ai {
+    align-self: flex-start; background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    font-family: var(--font-mono); font-size: 13px; color: #B7FFE9;
+    white-space: pre-wrap; min-height: 64px;
+  }
+  .caret { display: inline-block; width: 8px; height: 15px; background: var(--cyan); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── Strategy forge ─────────────────────────────────────────── */
+  .forge { margin-top: 64px; display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .node {
+    width: min(520px, 92vw); padding: 20px 24px; position: relative; z-index: 2;
+  }
+  .node .tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .22em; color: var(--cyan); }
+  .node.action .tag { color: var(--green); }
+  .node h4 { margin-top: 8px; font-size: 17px; font-weight: 600; }
+  .node p { margin-top: 6px; color: var(--slate); font-size: 13.5px; line-height: 1.55; }
+  .node.action { border-color: rgba(0,255,102,0.28); box-shadow: 0 0 44px rgba(0,255,102,0.09); }
+  .wire {
+    width: 2px; height: 58px; position: relative; z-index: 1;
+    background: linear-gradient(to bottom, rgba(0,229,255,0.7), rgba(112,0,255,0.7));
+  }
+  .wire::after {
+    content: ""; position: absolute; left: 50%; top: 0; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--cyan); transform: translateX(-50%);
+    box-shadow: 0 0 12px var(--cyan); animation: pulse-down 2.2s linear infinite;
+  }
+  @keyframes pulse-down { 0% { top: -4px; opacity: 0;} 15% {opacity: 1;} 85% {opacity: 1;} 100% { top: calc(100% - 4px); opacity: 0;} }
+
+  /* ── Features ───────────────────────────────────────────────── */
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 64px; }
+  .feature { padding: 34px 30px; transition: transform .35s cubic-bezier(.2,.8,.2,1), border-color .35s; }
+  .feature:hover { transform: translateY(-6px); border-color: rgba(0,229,255,0.35); }
+  .feature .glyph {
+    width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+    background: linear-gradient(135deg, rgba(0,229,255,0.14), rgba(112,0,255,0.14));
+    border: 1px solid rgba(0,229,255,0.25);
+    font-family: var(--font-mono); color: var(--cyan); font-size: 18px; font-weight: 700;
+  }
+  .feature h3 { font-family: var(--font-display); font-size: 28px; margin-top: 22px; font-weight: 600; }
+  .feature p { color: var(--slate); font-size: 14.5px; line-height: 1.7; margin-top: 12px; }
+
+  /* ── Pricing ────────────────────────────────────────────────── */
+  .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 64px; align-items: stretch; }
+  .price-card { padding: 36px 30px; display: flex; flex-direction: column; transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s; position: relative; }
+  .price-card:hover { transform: translateY(-8px); }
+  .price-card.featured {
+    border-color: rgba(0,229,255,0.5);
+    box-shadow: 0 0 70px rgba(0,229,255,0.14), inset 0 0 40px rgba(0,229,255,0.03);
+  }
+  .price-card.featured::before {
+    content: "MOST POPULAR"; position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .25em;
+    background: linear-gradient(120deg, var(--cyan), var(--purple)); color: #010204;
+    padding: 5px 14px; border-radius: 99px; font-weight: 700;
+  }
+  .price-card .tier { font-family: var(--font-mono); font-size: 12px; letter-spacing: .24em; color: var(--slate); }
+  .price-card .amount { font-family: var(--font-display); font-size: 52px; margin-top: 16px; font-weight: 500; }
+  .price-card .amount span { font-size: 16px; font-family: var(--font-body); color: var(--slate); }
+  .price-card ul { list-style: none; margin: 26px 0 34px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .price-card li { color: var(--slate); font-size: 14px; padding-left: 24px; position: relative; line-height: 1.5; }
+  .price-card li::before { content: "◆"; position: absolute; left: 0; color: var(--cyan); font-size: 10px; top: 4px; }
+  .price-card .btn { text-align: center; }
+
+  /* ── CTA / footer ───────────────────────────────────────────── */
+  .cta { text-align: center; padding-bottom: 40px; }
+  .cta .h-major { margin: 0 auto; }
+  .cta-buttons { display: flex; gap: 18px; justify-content: center; margin-top: 46px; flex-wrap: wrap; }
+  .cta .btn { padding: 16px 38px; font-size: 16px; border-radius: 14px; }
+  .cta .fine { margin-top: 26px; font-family: var(--font-mono); font-size: 12px; color: var(--slate); opacity: .7; }
+  footer {
+    border-top: 1px solid rgba(255,255,255,0.06); padding: 34px clamp(20px,5vw,64px);
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;
+    font-size: 13px; color: var(--slate);
+  }
+  footer .mono { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; }
+
+  .reveal { opacity: 0; transform: translateY(28px); transition: opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 900px) {
+    .chat-wrap, .grid-3, .pricing { grid-template-columns: 1fr; }
+    .nav-right .nav-link { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <a class="logo" href="/">CONFLUENT_<em>X</em></a>
+  <div class="nav-right">
+    <a class="nav-link" href="/login">Log In</a>
+    <a class="btn btn-primary" href="/register">Sign Up</a>
+  </div>
+</nav>
+
+<!-- ═══ THE FABLE: scroll-scrubbed cinematic ═══ -->
+<div id="film">
+  <div id="stage">
+    <canvas id="screen"></canvas>
+
+    <div id="stopbanner"><span>ORDER FILLED: STOP LOSS</span></div>
+
+    <div class="beat" data-act="1">
+      <h2>Tired of losing? Watching a flat 2D chart wait to stop you out<br/>is a game <span class="hl">you can't win.</span></h2>
+      <p>// ACT I — THE PAIN</p>
+    </div>
+    <div class="beat" data-act="2">
+      <h2>Explore <span class="hl">ConfluentX.</span><br/>Break out of the second dimension.</h2>
+      <p>// ACT II — THE PORTAL</p>
+    </div>
+    <div class="beat" data-act="3">
+      <h2>We shatter the flat paradigm to reveal the <span class="hl">true spatial structure</span> underneath.</h2>
+      <p>// ACT III — HYPERSPACE</p>
+    </div>
+    <div class="beat" data-act="4">
+      <h2>The market has a DNA. <span class="hl">We mapped it.</span><br/>Our AI synthesizes order flow in real time.</h2>
+      <p>// ACT IV — MARKET DNA</p>
+    </div>
+    <div class="beat" data-act="5">
+      <h2>Welcome to the future of trading.<br/><span class="hl">Build. Automate. Dominate.</span></h2>
+      <p>// ACT V — RESOLUTION</p>
+    </div>
+
+    <div class="scroll-hint">SCROLL&nbsp;&nbsp;▼</div>
+  </div>
+</div>
+
+<!-- ═══ Section 2: Ambient AI chat ═══ -->
+<section class="section" id="assistant">
+  <div class="reveal">
+    <div class="kicker">The Market Assistant</div>
+    <h2 class="h-major">An intelligence that reads the chart <em>with</em> you.</h2>
+    <p class="sub">Ask in plain English. The assistant scans structure, maps liquidity, and draws directly onto your canvas — fair value gaps, order blocks, session sweeps.</p>
+  </div>
+  <div class="chat-wrap">
+    <div class="glass chat-window reveal" id="chatDemo">
+      <div class="chat-head">
+        <span class="dot" style="background:var(--red)"></span>
+        <span class="dot" style="background:#f5c518"></span>
+        <span class="dot" style="background:var(--green)"></span>
+        <span style="margin-left:8px">confluentx://assistant — ES session</span>
+      </div>
+      <div class="chat-body">
+        <div class="msg user">Find the nearest 1H Fair Value Gaps on ES and highlight institutional order blocks.</div>
+        <div class="msg ai"><span id="aiText"></span><span class="caret"></span></div>
+      </div>
+    </div>
+    <div class="reveal">
+      <h3 style="font-family:var(--font-display);font-size:32px;font-weight:600;">Spoken like a trader.<br/>Executed like a machine.</h3>
+      <p class="sub" style="margin-top:16px">No scripting language to learn. No indicator soup. The assistant holds the entire order-flow context of your session and answers with drawings, not paragraphs.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Section 3: Strategy forge ═══ -->
+<section class="section" id="forge">
+  <div class="reveal" style="text-align:center">
+    <div class="kicker">The Strategy Forge</div>
+    <h2 class="h-major" style="margin:0 auto">Snap your edge together.<br/>Zero code.</h2>
+  </div>
+  <div class="forge">
+    <div class="glass node reveal">
+      <div class="tag">CONDITION 01</div>
+      <h4>Price sweeps London High</h4>
+      <p>Liquidity taken above the 02:00–05:00 session extreme.</p>
+    </div>
+    <div class="wire"></div>
+    <div class="glass node reveal">
+      <div class="tag">CONDITION 02</div>
+      <h4>AI detects 15m Fair Value Gap</h4>
+      <p>Unmitigated imbalance confirmed inside the displacement leg.</p>
+    </div>
+    <div class="wire"></div>
+    <div class="glass node action reveal">
+      <div class="tag">ACTION</div>
+      <h4>Execute Short at Market — Risk 1%</h4>
+      <p>Position sized automatically. Stop above the sweep. Managed by the engine.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Section 4: Pillars ═══ -->
+<section class="section" id="pillars">
+  <div class="reveal">
+    <div class="kicker">The Evolution</div>
+    <h2 class="h-major">Three verbs. One ecosystem.</h2>
+  </div>
+  <div class="grid-3">
+    <div class="glass feature reveal">
+      <div class="glyph">◈</div>
+      <h3>Visualize</h3>
+      <p>Escape the 2D flatland. See liquidity as heat, volume as gravity, and structure as terrain you can actually navigate.</p>
+    </div>
+    <div class="glass feature reveal">
+      <div class="glyph">◎</div>
+      <h3>Synthesize</h3>
+      <p>The integrated AI reads the chart, interprets macro context, and maps institutional structure the instant it forms.</p>
+    </div>
+    <div class="glass feature reveal">
+      <div class="glyph">⌁</div>
+      <h3>Automate</h3>
+      <p>Snap trading rules together visually and let the ecosystem execute with machine precision — and machine discipline.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Section 5: Pricing ═══ -->
+<section class="section" id="pricing">
+  <div class="reveal" style="text-align:center">
+    <div class="kicker">Ecosystem Access</div>
+    <h2 class="h-major" style="margin:0 auto">Choose your dimension.</h2>
+  </div>
+  <div class="pricing">
+    <div class="glass price-card reveal">
+      <div class="tier">CORE</div>
+      <div class="amount">$0<span> / forever</span></div>
+      <ul>
+        <li>Classic 2D charting engine</li>
+        <li>Basic volume profiles</li>
+        <li>Community access</li>
+      </ul>
+      <a class="btn btn-ghost" href="/register">Start Free</a>
+    </div>
+    <div class="glass price-card featured reveal">
+      <div class="tier">SPATIAL PRO</div>
+      <div class="amount">$99<span> / month</span></div>
+      <ul>
+        <li>3D topography engine</li>
+        <li>Live liquidity heatmaps</li>
+        <li>Visual strategy builder</li>
+        <li>Unlimited layouts &amp; indicators</li>
+      </ul>
+      <a class="btn btn-primary" href="/register">Go Spatial</a>
+    </div>
+    <div class="glass price-card reveal">
+      <div class="tier">AI AUTOMATION</div>
+      <div class="amount">$249<span> / month</span></div>
+      <ul>
+        <li>Unlimited AI chart analysis</li>
+        <li>Autonomous execution API</li>
+        <li>Risk enforcement engine</li>
+      </ul>
+      <a class="btn btn-ghost" href="/register">Automate</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Section 6: CTA ═══ -->
+<section class="section cta" id="access">
+  <div class="reveal">
+    <div class="kicker">Access</div>
+    <h2 class="h-major">The market won't wait.<br/>Neither should you.</h2>
+    <div class="cta-buttons">
+      <a class="btn btn-primary" href="/dashboard">Launch Web Dashboard</a>
+      <a class="btn btn-ghost" href="/register" title="Join the beta waitlist">Download for Windows (Beta)</a>
+    </div>
+    <div class="fine">* Mac OS version currently in development.</div>
+  </div>
+</section>
+
+<footer>
+  <span class="mono">CONFLUENT_X © 2026</span>
+  <span>Futures trading involves substantial risk of loss and is not suitable for all investors.</span>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ── Nav state ── */
+  const nav = document.getElementById("nav");
+  addEventListener("scroll", () => nav.classList.toggle("scrolled", scrollY > 40), { passive: true });
+
+  /* ── Reveal on view ── */
+  const io = new IntersectionObserver((es) => es.forEach(e => e.isIntersecting && e.target.classList.add("in")), { threshold: 0.18 });
+  document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+
+  /* ── AI typing demo ── */
+  const aiLine = "> Scanning ES continuous contract...\n> Identified 2 unmitigated FVGs.\n> Drawing spatial zones on chart.";
+  const aiText = document.getElementById("aiText");
+  let typed = false;
+  new IntersectionObserver((es) => {
+    if (!typed && es[0].isIntersecting) {
+      typed = true;
+      let i = 0;
+      const tick = () => { aiText.textContent = aiLine.slice(0, ++i); if (i < aiLine.length) setTimeout(tick, 26 + Math.random() * 40); };
+      setTimeout(tick, 500);
+    }
+  }, { threshold: 0.4 }).observe(document.getElementById("chatDemo"));
+
+  /* ══════════════════ THE FABLE — canvas film ══════════════════ */
+  const film = document.getElementById("film");
+  const canvas = document.getElementById("screen");
+  const ctx = canvas.getContext("2d");
+  const beats = [...document.querySelectorAll(".beat")];
+  const stopBanner = document.getElementById("stopbanner");
+
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(2, devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    dirty = true;
+  }
+  addEventListener("resize", resize, { passive: true });
+
+  /* Deterministic pseudo-random (stable film every viewing). */
+  function rng(seed) { return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
+
+  /* Pre-generated candle walk for Act I. */
+  const CANDLES = (() => {
+    const r = rng(77); const out = []; let p = 100;
+    for (let i = 0; i < 160; i++) {
+      const drift = i < 90 ? (r() - 0.48) * 3 : -(1.5 + r() * 3.5); // then crash
+      const o = p, c = p + drift;
+      out.push({ o, c, h: Math.max(o, c) + r() * 1.6, l: Math.min(o, c) - r() * 1.6 });
+      p = c;
+    }
+    return out;
+  })();
+
+  /* Starfield / particles reused across acts. */
+  const STARS = (() => { const r = rng(9); return Array.from({ length: 220 }, () => ({ x: r(), y: r(), z: 0.2 + r() * 0.8, tw: r() * Math.PI * 2 })); })();
+
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  const ease = (t) => t * t * (3 - 2 * t);
+  /** progress remapped into [a,b] of the film */
+  const span = (p, a, b) => clamp01((p - a) / (b - a));
+
+  function drawVignette() {
+    const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.85);
+    g.addColorStop(0, "rgba(1,2,4,0)"); g.addColorStop(1, "rgba(1,2,4,0.82)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+
+  /* ACT I — 2D chart pain (0 → .15) */
+  function actPain(t) {
+    ctx.fillStyle = "#04060B"; ctx.fillRect(0, 0, W, H);
+    // grid
+    ctx.strokeStyle = "rgba(138,150,177,0.08)"; ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 90) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 70) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    const shown = Math.floor(lerp(80, CANDLES.length, ease(t)));
+    const cw = Math.max(5, W / 90), gap = cw * 0.35;
+    const startX = W * 0.06;
+    const prices = CANDLES.slice(0, shown);
+    let min = Infinity, max = -Infinity;
+    prices.forEach(c => { min = Math.min(min, c.l); max = Math.max(max, c.h); });
+    const py = v => H * 0.14 + (max - v) / (max - min + 1e-6) * H * 0.62;
+
+    // long-position tool: entry at candle 80's close
+    const entry = CANDLES[79].c, tp = entry + 9, sl = entry - 6;
+    const zoneX = startX + 78 * (cw + gap) * ((shown / CANDLES.length));
+    ctx.fillStyle = "rgba(0,255,102,0.10)";
+    ctx.fillRect(zoneX, py(tp), W - zoneX - W * 0.04, py(entry) - py(tp));
+    ctx.fillStyle = "rgba(255,51,102,0.12)";
+    ctx.fillRect(zoneX, py(entry), W - zoneX - W * 0.04, py(sl) - py(entry));
+    ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.setLineDash([6, 5]);
+    ctx.beginPath(); ctx.moveTo(zoneX, py(entry)); ctx.lineTo(W - W * 0.04, py(entry)); ctx.stroke();
+    ctx.setLineDash([]);
+
+    const step = (W * 0.9) / prices.length;
+    prices.forEach((c, i) => {
+      const x = startX + i * step;
+      const up = c.c >= c.o;
+      ctx.strokeStyle = up ? "rgba(0,255,102,0.85)" : "rgba(255,51,102,0.85)";
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath(); ctx.moveTo(x + cw / 2, py(c.h)); ctx.lineTo(x + cw / 2, py(c.l)); ctx.stroke();
+      ctx.fillRect(x, Math.min(py(c.o), py(c.c)), Math.max(2, cw * 0.8), Math.max(2, Math.abs(py(c.o) - py(c.c))));
+    });
+
+    // stop-loss slam
+    const slam = span(t, 0.72, 1);
+    stopBanner.style.opacity = slam > 0 ? String(Math.min(1, slam * 1.6) * (t < 0.98 ? 1 : 1)) : "0";
+    if (slam > 0) { ctx.fillStyle = `rgba(255,51,102,${0.16 * Math.sin(slam * Math.PI)})`; ctx.fillRect(0, 0, W, H); }
+    drawVignette();
+  }
+
+  /* ACT II — portal (0.15 → .25) */
+  function actPortal(t) {
+    ctx.fillStyle = "#010204"; ctx.fillRect(0, 0, W, H);
+    // old chart swiped left
+    const off = ease(t) * W * 1.25;
+    ctx.save(); ctx.translate(-off, 0); ctx.globalAlpha = 1 - t * 0.8;
+    actPainStatic(); ctx.restore(); ctx.globalAlpha = 1;
+    // starfield rushing
+    STARS.forEach(s => {
+      const sx = (s.x * W + (1 - t) * 220 * s.z) % W;
+      const a = 0.25 + 0.6 * s.z * (0.6 + 0.4 * Math.sin(s.tw + t * 9));
+      ctx.fillStyle = `rgba(0,229,255,${a * t})`;
+      ctx.fillRect(sx, s.y * H, s.z * 2.2, s.z * 2.2);
+    });
+    drawCXLogo(lerp(W * 1.15, W / 2, ease(t)), H / 2, lerp(0.2, 1, ease(t)), t);
+    drawVignette();
+  }
+  function actPainStatic() { const keep = stopBanner.style.opacity; actPain(1); stopBanner.style.opacity = keep; }
+
+  function drawCXLogo(cx, cy, scale, glow) {
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(scale, scale);
+    ctx.shadowColor = "rgba(0,229,255,0.9)"; ctx.shadowBlur = 46 * glow;
+    ctx.font = `700 ${Math.min(W, H) * 0.24}px "JetBrains Mono", monospace`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = "rgba(0,229,255,0.95)"; ctx.lineWidth = 2.4;
+    ctx.strokeText("CX", 0, 0);
+    ctx.shadowBlur = 90 * glow; ctx.strokeStyle = "rgba(112,0,255,0.5)";
+    ctx.strokeText("CX", 0, 0);
+    ctx.restore();
+  }
+
+  /* ACT III — hyperspace shatter (0.25 → .40) */
+  function actShatter(t) {
+    ctx.fillStyle = "#010204"; ctx.fillRect(0, 0, W, H);
+    const rush = ease(span(t, 0, 0.55));
+    // hyperspace streaks
+    STARS.forEach(s => {
+      const dx = (s.x - 0.5), dy = (s.y - 0.5);
+      const len = rush * 260 * s.z;
+      ctx.strokeStyle = `rgba(${s.z > 0.6 ? "0,229,255" : "112,0,255"},${0.5 * rush + 0.1})`;
+      ctx.lineWidth = s.z * 1.6;
+      ctx.beginPath();
+      ctx.moveTo(W / 2 + dx * W * (0.2 + rush), H / 2 + dy * H * (0.2 + rush));
+      ctx.lineTo(W / 2 + dx * (W * (0.2 + rush) + len), H / 2 + dy * (H * (0.2 + rush) + len));
+      ctx.stroke();
+    });
+    // logo blasting past camera
+    if (t < 0.5) drawCXLogo(W / 2, H / 2, 1 + ease(t * 2) * 7, 1 - t * 2);
+    // terrain mesh forming
+    const form = ease(span(t, 0.45, 1));
+    if (form > 0) drawTerrain(form, 0);
+    drawVignette();
+  }
+
+  function drawTerrain(alpha, spin) {
+    const rows = 16, cols = 34;
+    const horizon = H * 0.42;
+    ctx.lineWidth = 1;
+    for (let r = 0; r < rows; r++) {
+      const depth = r / rows;
+      const y0 = horizon + depth * depth * H * 0.62;
+      ctx.strokeStyle = `rgba(0,229,255,${(0.5 - depth * 0.4) * alpha})`;
+      ctx.beginPath();
+      for (let c = 0; c <= cols; c++) {
+        const fx = c / cols;
+        const x = lerp(W * (0.5 - 0.75 * (0.3 + depth)), W * (0.5 + 0.75 * (0.3 + depth)), fx);
+        const h = Math.sin(fx * 9 + r * 0.9 + spin * 2) * Math.cos(fx * 4 - r) * (1 - depth) * H * 0.06;
+        c === 0 ? ctx.moveTo(x, y0 + h) : ctx.lineTo(x, y0 + h);
+      }
+      ctx.stroke();
+    }
+  }
+
+  /* ACT IV — DNA descent (0.40 → .70) */
+  function actDNA(t) {
+    ctx.fillStyle = "#010204"; ctx.fillRect(0, 0, W, H);
+    // faint stars
+    STARS.forEach(s => { ctx.fillStyle = `rgba(138,150,177,${0.25 * s.z})`; ctx.fillRect(s.x * W, s.y * H, s.z * 1.6, s.z * 1.6); });
+
+    const descent = t * 26;
+    const cx = W / 2, amp = Math.min(W * 0.3, 260);
+    for (let strand = 0; strand < 2; strand++) {
+      for (let i = 0; i < 90; i++) {
+        const yy = (i / 90) * H * 1.3 - H * 0.15;
+        const phase = i * 0.32 + descent + strand * Math.PI;
+        const x = cx + Math.sin(phase) * amp;
+        const z = (Math.cos(phase) + 1) / 2; // 0 back, 1 front
+        const rr = lerp(1.6, 5.2, z);
+        ctx.fillStyle = strand === 0
+          ? `rgba(0,229,255,${lerp(0.15, 0.95, z)})`
+          : `rgba(112,0,255,${lerp(0.15, 0.95, z)})`;
+        ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10 * z;
+        ctx.beginPath(); ctx.arc(x, yy, rr, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+        // rungs
+        if (strand === 0 && i % 6 === 0) {
+          const x2 = cx + Math.sin(phase + Math.PI) * amp;
+          ctx.strokeStyle = `rgba(255,255,255,${0.08 + z * 0.1})`;
+          ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x2, yy); ctx.stroke();
+        }
+      }
+    }
+    // AI laser FVG boxes snapping on
+    const boxes = 3;
+    for (let b = 0; b < boxes; b++) {
+      const bt = span(t, 0.2 + b * 0.22, 0.38 + b * 0.22);
+      if (bt <= 0) continue;
+      const by = H * (0.2 + b * 0.26), bw = lerp(0, W * 0.26, ease(bt)), bh = H * 0.075;
+      const bx = b % 2 ? cx + amp * 0.35 : cx - amp * 0.35 - bw;
+      ctx.strokeStyle = "rgba(0,229,255,0.9)"; ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(0,229,255,0.07)"; ctx.fillRect(bx, by, bw, bh);
+      if (bt > 0.5) {
+        ctx.fillStyle = "rgba(0,229,255,0.85)";
+        ctx.font = `500 11px "JetBrains Mono", monospace`;
+        ctx.fillText("FVG · UNMITIGATED", bx + 8, by - 7);
+      }
+      // scanning laser
+      ctx.strokeStyle = `rgba(0,229,255,${0.5 * (1 - bt)})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, by + bh / 2); ctx.lineTo(bx + (b % 2 ? 0 : bw), by + bh / 2); ctx.stroke();
+    }
+    drawVignette();
+  }
+
+  /* ACT V — core resolution (0.70 → 1) */
+  function actCore(t) {
+    ctx.fillStyle = "#010204"; ctx.fillRect(0, 0, W, H);
+    const bloom = ease(t);
+    const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, lerp(60, Math.max(W, H) * 0.85, bloom));
+    g.addColorStop(0, `rgba(255,222,140,${0.85})`);
+    g.addColorStop(0.25, `rgba(0,229,255,${0.35 * (1 - t * 0.5)})`);
+    g.addColorStop(0.6, `rgba(112,0,255,${0.16 * (1 - t * 0.6)})`);
+    g.addColorStop(1, "rgba(1,2,4,0)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // golden path
+    ctx.strokeStyle = `rgba(255,214,120,${0.9 * bloom})`;
+    ctx.lineWidth = lerp(1, 5, bloom);
+    ctx.shadowColor = "rgba(255,214,120,0.8)"; ctx.shadowBlur = 30 * bloom;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 12) {
+      const y = H * 0.62 - Math.sin(x / W * Math.PI) * H * 0.18 * bloom - (x / W) * H * 0.1;
+      x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.shadowBlur = 0;
+    // residual helix fading above
+    ctx.globalAlpha = 1 - bloom; if (ctx.globalAlpha > 0.02) actDNAtail(t); ctx.globalAlpha = 1;
+  }
+  function actDNAtail(t) {
+    const cx = W / 2, amp = Math.min(W * 0.3, 260);
+    for (let i = 0; i < 40; i++) {
+      const yy = (i / 40) * H * 0.5 - H * 0.25;
+      const phase = i * 0.32 + (0.7 + t) * 26;
+      const x = cx + Math.sin(phase) * amp * (1 - t);
+      ctx.fillStyle = "rgba(0,229,255,0.4)";
+      ctx.beginPath(); ctx.arc(x, yy, 2.4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  /* ── Director: pick act by progress, fade text beats ── */
+  const ACTS = [
+    { to: 0.15, draw: actPain, beat: 0 },
+    { to: 0.25, draw: actPortal, beat: 1 },
+    { to: 0.40, draw: actShatter, beat: 2 },
+    { to: 0.70, draw: actDNA, beat: 3 },
+    { to: 1.01, draw: actCore, beat: 4 },
+  ];
+
+  let progress = 0, dirty = true;
+  function onScroll() {
+    const rect = film.getBoundingClientRect();
+    const total = film.offsetHeight - innerHeight;
+    progress = clamp01(-rect.top / total);
+    dirty = true;
+  }
+  addEventListener("scroll", onScroll, { passive: true });
+
+  function tick() {
+    if (!dirty) return;
+    dirty = false;
+    try {
+      let from = 0;
+      const act = ACTS.find(a => progress < a.to) ?? ACTS[ACTS.length - 1];
+      ACTS.forEach(a => { if (a !== act && a.to <= (act.to - 0.0001)) from = Math.max(from, a.to); });
+      const t = span(progress, from, act.to);
+      act.draw(t);
+      if (act.beat !== 0) stopBanner.style.opacity = "0";
+      beats.forEach((b, i) => {
+        const on = i === act.beat && t > 0.08 && t < 0.94;
+        b.style.opacity = on ? "1" : "0";
+      });
+      document.querySelector(".scroll-hint").style.opacity = progress < 0.02 ? "" : "0";
+    } catch (err) {
+      console.error("[fable] draw error:", err);
+    }
+  }
+
+  function frame() {
+    // Schedule first — a draw exception must never kill the film loop.
+    requestAnimationFrame(frame);
+    tick();
+  }
+  // rAF never fires in hidden/embedded tabs — keep the film honest there too.
+  setInterval(() => { if (document.hidden) tick(); }, 300);
+
+  if (document.fonts && document.fonts.ready) {
+    // Repaint once display fonts arrive (the CX logo uses JetBrains Mono).
+    document.fonts.ready.then(() => { dirty = true; });
+  }
+  resize(); onScroll(); frame();
+})();
+</script>
+</body>
+</html>
