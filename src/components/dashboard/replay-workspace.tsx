@@ -235,6 +235,86 @@ export function ReplayWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
     lastCursorRef.current = -1;
   }, [candles.length, clearPriceLines, startBalance]);
 
+  /* ── Draggable SL/TP lines ──────────────────────────────────────────────── */
+
+  const positionLiveRef = useRef<OpenPosition | null>(null);
+  useEffect(() => {
+    positionLiveRef.current = position;
+  }, [position]);
+  const tickLiveRef = useRef({ tick: 0.25, decimals: 2 });
+  useEffect(() => {
+    tickLiveRef.current = { tick: meta?.tickSize ?? 0.25, decimals };
+  }, [meta?.tickSize, decimals]);
+  const dragLevelRef = useRef<"stop" | "target" | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const HIT_PX = 7;
+
+    const levelAt = (y: number): "stop" | "target" | null => {
+      const p = positionLiveRef.current;
+      const series = seriesRef.current;
+      if (!p || !series) return null;
+      const ys = series.priceToCoordinate(p.stop);
+      const yt = series.priceToCoordinate(p.target);
+      if (ys !== null && Math.abs(y - ys) <= HIT_PX) return "stop";
+      if (yt !== null && Math.abs(y - yt) <= HIT_PX) return "target";
+      return null;
+    };
+
+    const onDown = (e: PointerEvent) => {
+      const level = levelAt(e.clientY - el.getBoundingClientRect().top);
+      if (!level) return;
+      dragLevelRef.current = level;
+      e.preventDefault();
+      e.stopPropagation(); // steal this gesture from the chart's pan handler
+      el.setPointerCapture(e.pointerId);
+    };
+
+    const onMove = (e: PointerEvent) => {
+      const y = e.clientY - el.getBoundingClientRect().top;
+      const level = dragLevelRef.current;
+      if (!level) {
+        el.style.cursor = levelAt(y) ? "ns-resize" : "";
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const p = positionLiveRef.current;
+      const series = seriesRef.current;
+      if (!p || !series) return;
+      const raw = series.coordinateToPrice(y);
+      if (raw === null) return;
+      const { tick, decimals: dp } = tickLiveRef.current;
+      let price = Number((Math.round(Number(raw) / tick) * tick).toFixed(dp));
+      // Exit levels stay on their own side of the entry (size never changes).
+      if (level === "stop") {
+        price = p.side === "long" ? Math.min(price, p.entry - tick) : Math.max(price, p.entry + tick);
+      } else {
+        price = p.side === "long" ? Math.max(price, p.entry + tick) : Math.min(price, p.entry - tick);
+      }
+      priceLinesRef.current[level === "stop" ? 1 : 2]?.applyOptions({ price });
+      setPosition((prev) => (prev ? { ...prev, [level]: price } : prev));
+    };
+
+    const onUp = (e: PointerEvent) => {
+      if (!dragLevelRef.current) return;
+      dragLevelRef.current = null;
+      el.style.cursor = "";
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    };
+
+    el.addEventListener("pointerdown", onDown, true);
+    el.addEventListener("pointermove", onMove, true);
+    el.addEventListener("pointerup", onUp, true);
+    return () => {
+      el.removeEventListener("pointerdown", onDown, true);
+      el.removeEventListener("pointermove", onMove, true);
+      el.removeEventListener("pointerup", onUp, true);
+    };
+  }, []);
+
   /* ── Chart setup ────────────────────────────────────────────────────────── */
 
   useEffect(() => {
