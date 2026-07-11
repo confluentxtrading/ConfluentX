@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
-import { Canvas, extend, useFrame, type ThreeElement } from "@react-three/fiber";
+import { Canvas, extend, useFrame, useThree, type ThreeElement } from "@react-three/fiber";
 import { Scroll, ScrollControls, shaderMaterial, useScroll } from "@react-three/drei";
 import * as THREE from "three";
 
@@ -42,18 +42,52 @@ interface Candle2D {
   l: number;
 }
 
+/**
+ * Realistic dive-bomb: markets breathe on the way down. Expanding sell-off
+ * legs, green counter-trend retracements between them, upper-wick rejections
+ * on the sell legs, lower-wick liquidity sweeps on the bounces.
+ */
 const CHART_CANDLES: Candle2D[] = (() => {
   const r = rng(1337);
   const out: Candle2D[] = [];
   let p = 100;
-  for (let i = 0; i < 96; i++) {
-    // Calm drift … then the scripted dive-bomb at 58–68 … then flat shock.
-    const drift =
-      i < 58 ? (r() - 0.47) * 2.2 : i < 68 ? -(2.5 + r() * 4.5) : (r() - 0.5) * 1.6;
+  const push = (drift: number, wickUp: number, wickDn: number) => {
     const o = p;
     const c = p + drift;
-    out.push({ o, c, h: Math.max(o, c) + r() * 1.2, l: Math.min(o, c) - r() * 1.2 });
+    out.push({ o, c, h: Math.max(o, c) + wickUp, l: Math.min(o, c) - wickDn });
     p = c;
+  };
+
+  // Calm regime — small bodies, honest little wicks both sides.
+  for (let i = 0; i < 58; i++) {
+    push((r() - 0.47) * 2.2, 0.15 + r() * 1.1, 0.15 + r() * 1.1);
+  }
+
+  // The dump — legs down with retracements, ranges expanding leg over leg.
+  let leg = 0;
+  while (out.length < 84) {
+    const legLen = 3 + Math.floor(r() * 3);
+    let legDrop = 0;
+    for (let j = 0; j < legLen; j++) {
+      const d = -(1.1 + r() * 2.2) * (1 + leg * 0.1);
+      legDrop -= d;
+      // Sellers slam it; buyers poke highs that get rejected → upper wicks.
+      push(d, 0.4 + r() * 1.8, 0.15 + r() * 0.7);
+    }
+    const bounceLen = 1 + Math.floor(r() * 3);
+    let remaining = legDrop * (0.3 + r() * 0.3);
+    for (let j = 0; j < bounceLen; j++) {
+      const d = Math.max(0.25, (remaining / (bounceLen - j)) * (0.7 + r() * 0.6));
+      remaining -= d;
+      // Bounce candles sweep the lows first → long lower wicks.
+      push(d, 0.25 + r() * 0.7, 0.5 + r() * 1.8);
+    }
+    leg++;
+  }
+
+  // Post-shock chop, drifting heavy.
+  for (let i = 0; i < 10; i++) {
+    push((r() - 0.54) * 1.8, 0.2 + r() * 1.4, 0.2 + r() * 1.4);
   }
   return out;
 })();
@@ -61,37 +95,47 @@ const CHART_CANDLES: Candle2D[] = (() => {
 const ENTRY_INDEX = 46;
 
 function drawChart(ctx: CanvasRenderingContext2D, W: number, H: number, t: number) {
+  const LEN = CHART_CANDLES.length;
   ctx.fillStyle = "#04060B";
   ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = "rgba(138,150,177,0.10)";
+  ctx.strokeStyle = "rgba(138,150,177,0.09)";
   ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 48) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 0; y < H; y += 36) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let x = 0; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  const shown = Math.max(50, Math.floor(50 + t * 46));
-  const candles = CHART_CANDLES.slice(0, Math.min(shown, CHART_CANDLES.length));
+  const shown = Math.max(50, Math.floor(50 + t * (LEN - 50)));
+  const candles = CHART_CANDLES.slice(0, Math.min(shown, LEN));
   let min = Infinity, max = -Infinity;
   for (const c of candles) { min = Math.min(min, c.l); max = Math.max(max, c.h); }
   const pad = (max - min) * 0.12;
   min -= pad; max += pad;
   const py = (v: number) => ((max - v) / (max - min)) * H;
-  const step = W / 96;
+  const step = W / LEN;
+  const last = candles[candles.length - 1];
+
+  // Right-edge price scale — the borderless terminal feel.
+  ctx.font = "500 15px monospace";
+  ctx.fillStyle = "rgba(138,150,177,0.55)";
+  for (let y = 60; y < H - 20; y += 120) {
+    const price = max - ((max - min) * y) / H;
+    ctx.fillText(price.toFixed(2), W - 78, y + 5);
+  }
 
   // The long-position risk box, visible once the order is "placed".
   if (shown > ENTRY_INDEX) {
     const entry = CHART_CANDLES[ENTRY_INDEX].c;
     const x0 = ENTRY_INDEX * step;
     ctx.fillStyle = "rgba(0,255,102,0.10)";
-    ctx.fillRect(x0, py(entry + 7), W - x0, py(entry) - py(entry + 7));
+    ctx.fillRect(x0, py(entry + 9), W - x0, py(entry) - py(entry + 9));
     ctx.fillStyle = "rgba(255,51,102,0.14)";
-    ctx.fillRect(x0, py(entry), W - x0, py(entry - 5) - py(entry));
-    ctx.setLineDash([5, 4]);
+    ctx.fillRect(x0, py(entry), W - x0, py(entry - 6) - py(entry));
+    ctx.setLineDash([7, 6]);
     ctx.strokeStyle = "rgba(255,255,255,0.5)";
     ctx.beginPath(); ctx.moveTo(x0, py(entry)); ctx.lineTo(W, py(entry)); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(255,255,255,0.75)";
-    ctx.font = "600 11px monospace";
-    ctx.fillText("LONG 2 @ MKT", x0 + 6, py(entry) - 6);
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.font = "600 16px monospace";
+    ctx.fillText("LONG 2 @ MKT", x0 + 8, py(entry) - 8);
   }
 
   candles.forEach((c, i) => {
@@ -99,26 +143,72 @@ function drawChart(ctx: CanvasRenderingContext2D, W: number, H: number, t: numbe
     const up = c.c >= c.o;
     ctx.strokeStyle = up ? "rgba(0,255,102,0.9)" : "rgba(255,51,102,0.95)";
     ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = Math.max(1, step * 0.08);
     ctx.beginPath();
     ctx.moveTo(x + step * 0.4, py(c.h));
     ctx.lineTo(x + step * 0.4, py(c.l));
     ctx.stroke();
     ctx.fillRect(x, Math.min(py(c.o), py(c.c)), step * 0.72, Math.max(2, Math.abs(py(c.o) - py(c.c))));
   });
+
+  // Last-price tag riding the newest close.
+  if (last) {
+    const up = last.c >= last.o;
+    const y = py(last.c);
+    ctx.fillStyle = up ? "rgba(0,255,102,0.9)" : "rgba(255,51,102,0.95)";
+    ctx.fillRect(W - 84, y - 12, 80, 24);
+    ctx.fillStyle = "#04060B";
+    ctx.font = "700 15px monospace";
+    ctx.fillText(last.c.toFixed(2), W - 78, y + 5);
+  }
+
+  // Terminal header + watermark.
+  ctx.fillStyle = "rgba(244,245,250,0.85)";
+  ctx.font = "700 18px monospace";
+  ctx.fillText("NQ · 5m", 22, 34);
+  if (last) {
+    ctx.font = "500 15px monospace";
+    ctx.fillStyle = "rgba(138,150,177,0.7)";
+    ctx.fillText(
+      `O ${last.o.toFixed(2)}  H ${last.h.toFixed(2)}  L ${last.l.toFixed(2)}  C ${last.c.toFixed(2)}`,
+      120, 34
+    );
+  }
+  ctx.font = "700 44px monospace";
+  ctx.fillStyle = "rgba(244,245,250,0.045)";
+  ctx.fillText("CONFLUENTX TERMINAL", W / 2 - 290, H / 2 + 14);
+}
+
+const CHART_CAMERA_DISTANCE = 7.5; // camera start z minus plane z
+const CHART_FOV_DEG = 60;
+
+/**
+ * Plane dimensions that exactly fill the viewport at the camera's starting
+ * distance (plus margin for handheld drift) — the borderless terminal.
+ */
+function useChartPlaneSize(): readonly [number, number] {
+  const size = useThree((s) => s.size);
+  return useMemo(() => {
+    const h = 2 * CHART_CAMERA_DISTANCE * Math.tan(THREE.MathUtils.degToRad(CHART_FOV_DEG / 2)) * 1.06;
+    const w = (h * size.width) / Math.max(1, size.height);
+    return [w, h] as const;
+  }, [size.width, size.height]);
 }
 
 function ChartPlane() {
   const scroll = useScroll();
   const mesh = useRef<THREE.Mesh>(null);
   const lastDraw = useRef(-1);
+  const [w, h] = useChartPlaneSize();
   const { texture, ctx, canvas } = useMemo(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 384;
+    canvas.width = 1280;
+    canvas.height = 720;
     const ctx = canvas.getContext("2d")!;
     drawChart(ctx, canvas.width, canvas.height, 0);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
     return { texture, ctx, canvas };
   }, []);
 
@@ -137,7 +227,7 @@ function ChartPlane() {
 
   return (
     <mesh ref={mesh} position={[0, 0.6, 0]}>
-      <planeGeometry args={[7, 4.2]} />
+      <planeGeometry key={`${w.toFixed(2)}x${h.toFixed(2)}`} args={[w, h]} />
       <meshBasicMaterial map={texture} toneMapped={false} />
     </mesh>
   );
@@ -151,21 +241,24 @@ function Shards() {
   const scroll = useScroll();
   const inst = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
+  const [w, h] = useChartPlaneSize();
   const shards = useMemo(() => {
     const r = rng(4242);
+    const sizeScale = Math.sqrt((w * h) / (7 * 4.2));
     return Array.from({ length: SHARD_COUNT }, () => {
-      const gx = (r() - 0.5) * 7;
-      const gy = 0.6 + (r() - 0.5) * 4.2;
+      // Shards originate across the full-viewport glass.
+      const gx = (r() - 0.5) * w;
+      const gy = 0.6 + (r() - 0.5) * h;
       return {
         origin: new THREE.Vector3(gx, gy, 0),
         // Outward from the breach point, biased hard toward the camera (+z).
         velocity: new THREE.Vector3(gx * (0.6 + r()), (gy - 0.6) * (0.6 + r()), 4 + r() * 14),
         axis: new THREE.Vector3(r() - 0.5, r() - 0.5, r() - 0.5).normalize(),
         spin: (r() - 0.5) * 14,
-        scale: 0.1 + r() * 0.26,
+        scale: (0.1 + r() * 0.26) * sizeScale,
       };
     });
-  }, []);
+  }, [w, h]);
 
   useFrame(() => {
     const im = inst.current;
